@@ -1,0 +1,486 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Source S3 Bucket - Must be same Region as this stack
+        Parameters:
+          - EKSS3Bucket
+      - Label:
+          default: CrowdStrike Falcon Credentials
+        Parameters:
+          - FalconClientId
+          - FalconClientSecret
+          - FalconCID
+          - CrowdStrikeCloud
+          - DockerAPIToken
+      - Label:
+          default: Stackset Configuration
+        Parameters:
+          - AdministrationRoleARN
+          - ExecutionRoleName
+          - Regions
+      - Label:
+          default: EKS Sensor Configuration
+        Parameters:
+          - Registry
+          - Backend
+          - EnableKAC
+      - Label:
+          default: CodeBuild Configuration
+        Parameters:
+          - CodeBuildProject
+          - CodeBuildRole
+          - KubernetesUserName
+
+Parameters:
+  AdministrationRoleARN: 
+    Type: String
+    Default: arn:aws:iam::622266429069:role/AWS-QuickSetup-StackSet-Local-AdministrationRole
+  ExecutionRoleName: 
+    Type: String
+    Default: AWS-QuickSetup-StackSet-Local-ExecutionRole
+  EKSS3Bucket:
+    Type: String
+  EnableEKS:
+    Type: String
+    Description: Enable CrowdStrike Automatic Sensor Deployment for EKS
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+  Backend:
+    Type: String
+    Description: kernel or bpf for Daemonset Sensor
+    AllowedValues:
+      - 'kernel'
+      - 'bpf'
+    Default: 'kernel'
+  Registry:
+    Type: String
+    Description: Source Falcon Image from CrowdStrike or mirror to ECR
+    AllowedValues:
+      - 'crowdstrike'
+      - 'ecr'
+    Default: 'crowdstrike'
+  EnableKAC:
+    Type: String
+    Description: Deploy Kubernetes Admission Controller (KAC).  For more info see https://falcon.crowdstrike.com/documentation/page/aa4fccee/container-security#s41cbec3
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+  CrowdStrikeCloud:
+    Type: String
+    Description: Cloud for your Falcon CID (eg. us-1, us-2 or eu-1)
+    AllowedValues:
+      - 'us-1'
+      - 'us-2'
+      - 'eu-1'
+    Default: 'us-1'
+  CodeBuildProject:
+    Type: String
+    Default: "crowdstrike-eks-codebuild"
+  CodeBuildRole:
+    Type: String
+    Default: "crowdstrike-eks-codebuild-role"
+  FalconClientId:
+    Type: String
+    NoEcho: true
+  FalconClientSecret:
+    Type: String
+    NoEcho: true
+  Regions:
+    Type: CommaDelimitedList
+  KubernetesUserName:
+    Type: String
+    Default: crowdstrike-eks
+  FalconCID:
+    Type: String
+  DockerAPIToken:
+    Type: String
+    NoEcho: true
+
+Conditions:
+  UseECR: !Equals [ !Ref 'Registry', 'ecr' ]
+
+Resources:
+
+  # EventBridge Resources to Invoke Lambda
+  EKSEventBus: 
+    Type: AWS::Events::EventBus
+    Properties: 
+        Name: "crowdstrike-eks-eventbus"
+  EKSRule: 
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "EventRule"
+      EventBusName: !GetAtt EKSEventBus.Arn
+      EventPattern: 
+        source: 
+          - "aws.eks"
+        detail-type: 
+          - "AWS API Call via CloudTrail"
+        detail: 
+          eventSource: 
+            - "eks.amazonaws.com"
+          eventName:
+            - "CreateCluster"
+            - "CreateFargateProfile"
+      State: "ENABLED"
+      Name: crowdstrike-eks-rule
+      Targets: 
+        - Arn: !GetAtt EKSLambda.Arn
+          Id: "CrowdStrikeEKSFunction"
+  EKSEventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: events.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: crowdstrike-eks-eb-role
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action: events:PutEvents
+            Resource: !GetAtt EKSEventBus.Arn
+  EKSEventBridgeStackSet:
+    Type: AWS::CloudFormation::StackSet
+    Properties:
+      AdministrationRoleARN: !Ref AdministrationRoleARN
+      ExecutionRoleName: !Ref ExecutionRoleName
+      StackSetName: "CrowdStrike-EKS-EB-Stackset"
+      Parameters:
+        - ParameterKey: EventBusArn
+          ParameterValue: !GetAtt EKSEventBus.Arn
+        - ParameterKey: EventBridgeRole
+          ParameterValue: !GetAtt EKSEventBridgeRole.Arn
+      PermissionModel: SELF_MANAGED
+      OperationPreferences:
+        MaxConcurrentPercentage: 100
+        FailureTolerancePercentage: 50
+        RegionConcurrencyType: PARALLEL
+      StackInstancesGroup:
+        - DeploymentTargets:
+            AccountFilterType: NONE
+            Accounts:
+              - !Ref AWS::AccountId
+          Regions: !Ref Regions
+      TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eventbridge_stackset.yml
+
+  # Lambda Function to process event, check for EKS API Access and StartBuild
+  EKSLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Environment:
+        Variables:
+          project_name: !Ref CodeBuildProject
+          artifact_bucket: !Ref EKSS3Bucket
+      Handler: lambda_function.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt "EKSLambdaRole.Arn"
+      Runtime: python3.11
+      Timeout: 300
+      FunctionName: crowdstrike-abi-eks-function
+      Code:
+        S3Bucket: !Ref EKSS3Bucket
+        S3Key: lambda.zip
+  EKSInvokeLambdaPermission: 
+    Type: AWS::Lambda::Permission
+    DependsOn: EKSLambda
+    Properties: 
+      FunctionName: !Ref EKSLambda
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt EKSRule.Arn
+  EKSLambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: crowdstrike-eks-lambda-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: crowdstrike-eks-lambda-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - eks:DescribeCluster
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:codebuild:*:${AWS::AccountId}:project/${CodeBuildProject}'
+
+  # CodeBuild Project to deploy Falcon Operator and Sensor
+  EKSCodeBuild:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: "Triggered by CrowdStrike EKS Lambda to provision Falcon Operator and Sensor"
+      Environment: 
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+          - Name: FALCON_CLIENT_ID
+            Value: !Sub
+              - '${arn}:client_id'
+              - { arn: !Ref SMFalconAPIKey }
+            Type: SECRETS_MANAGER
+          - Name: FALCON_CLIENT_SECRET
+            Value: !Sub
+              - '${arn}:client_secret'
+              - { arn: !Ref SMFalconAPIKey }
+            Type: SECRETS_MANAGER
+          - Name: CS_CLOUD
+            Value: !Sub
+              - '${arn}:cs_cloud'
+              - { arn: !Ref SMFalconAPIKey }
+            Type: SECRETS_MANAGER
+          - Name: DOCKER_API_TOKEN
+            Value: !Sub
+              - '${arn}:docker_api_token'
+              - { arn: !Ref SMFalconAPIKey }
+            Type: SECRETS_MANAGER
+          - Name: PRINCIPAL_ARN
+            Type: PLAINTEXT
+            Value: !GetAtt EKSCodeBuildRole.Arn
+          - Name: S3_BUCKET
+            Type: PLAINTEXT
+            Value: !Ref EKSS3Bucket
+          - Name: USERNAME
+            Type: PLAINTEXT
+            Value: !Ref KubernetesUserName
+          - Name: CLUSTER
+            Type: PLAINTEXT
+            Value: lambda
+          - Name: CLUSTER_ARN
+            Type: PLAINTEXT
+            Value: lambda
+          - Name: NODE_TYPE
+            Type: PLAINTEXT
+            Value: lambda
+          - Name: CID
+            Type: PLAINTEXT
+            Value: !Ref FalconCID
+          - Name: ENABLE_KAC
+            Type: PLAINTEXT
+            Value: !Ref EnableKAC
+          - Name: REGISTRY
+            Type: PLAINTEXT
+            Value: !Ref Registry
+          - Name: CROWDSTRIKE_CLOUD
+            Type: PLAINTEXT
+            Value: !Ref CrowdStrikeCloud
+          - Name: ACCOUNT_ID
+            Type: PLAINTEXT
+            Value: !Ref AWS::AccountId
+          - Name: BACKEND
+            Type: PLAINTEXT
+            Value: !Ref Backend
+          - Name: IMAGE_REGION
+            Type: PLAINTEXT
+            Value: !If [ UseECR, !Ref AWS::Region, 'CrowdStrike' ]
+          - Name: NODE_SENSOR_REPO
+            Type: PLAINTEXT
+            Value: !If [ UseECR, !Ref NodeSensorRepo, 'CrowdStrike' ]
+          - Name: NODE_SENSOR_URI
+            Type: PLAINTEXT
+            Value: !If [ UseECR, !GetAtt NodeSensorRepo.RepositoryUri, 'CrowdStrike' ]
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true
+        Type: LINUX_CONTAINER
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Name: !Ref CodeBuildProject
+      ServiceRole: !GetAtt EKSCodeBuildRole.Arn
+      Source: 
+        Location: !Sub '${EKSS3Bucket}/eks_build.zip'
+        Type: S3
+      TimeoutInMinutes: 90
+      Visibility: PRIVATE
+  EKSCodeBuildRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Ref CodeBuildRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: codebuild-base-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${CodeBuildProject}'
+                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${CodeBuildProject}:*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::codepipeline-${AWS::Region}-*'
+              - Effect: Allow
+                Action:
+                  - codebuild:CreateReportGroup
+                  - codebuild:CreateReport
+                  - codebuild:UpdateReport
+                  - codebuild:BatchPutTestCases
+                  - codebuild:BatchPutCodeCoverages
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${CodeBuildProject}-*'
+        - PolicyName: codebuild-s3-readonly-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: 
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${EKSS3Bucket}/buildspec.yml'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${EKSS3Bucket}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${EKSS3Bucket}'
+        - PolicyName: codebuild-eks-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - eks:DescribeFargateProfile
+                  - eks:ListAccessEntries
+                  - eks:ListAssociatedAccessPolicies
+                  - eks:DescribeNodegroup
+                  - eks:ListIdentityProviderConfigs
+                  - eks:ListNodegroups
+                  - eks:DescribeAccessEntry
+                  - eks:ListFargateProfiles
+                  - eks:DescribeIdentityProviderConfig
+                  - eks:DescribeUpdate
+                  - eks:AccessKubernetesApi
+                  - eks:DescribeCluster
+                  - eks:ListClusters
+                  - eks:ListAccessPolicies
+                  - eks:AssociateIdentityProviderConfig
+                  - eks:AssociateAccessPolicy
+                  - eks:DisassociateAccessPolicy
+                  - ecr:GetAuthorizationToken
+                  - ecr:ListImages
+                  - ecr:InitiateLayerUpload
+                  - ecr:CreateRepository
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - iam:CreateOpenIDConnectProvider
+                  - iam:GetOpenIDConnectProvider
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - eks:UpdateAccessEntry
+                  - eks:CreateAccessEntry
+                  - eks:DeleteAccessEntry
+                Resource: 
+                  - !Sub 'arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/*'
+                  - !Sub 'arn:${AWS::Partition}:eks:*:${AWS::AccountId}:access-entry/*/${CodeBuildRole}/${AWS::AccountId}/$/*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:crowdstrike-eks-secret-*'
+
+  SMFalconAPIKey:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: crowdstrike-eks-secret
+      Description: 'Client ID and Secret for the Falcon API'
+      SecretString: !Sub |
+        {
+          "client_id": "${FalconClientId}",
+          "client_secret": "${FalconClientSecret}",
+          "cid": "${FalconCID}",
+          "cs_cloud":"${CrowdStrikeCloud}",
+          "docker_api_token":"${DockerAPIToken}"
+        }
+
+ # Create ECR Repositories for Falcon Images
+  NodeSensorRepo:
+    Type: AWS::ECR::Repository
+    Condition: UseECR
+    Properties:
+      EmptyOnDelete: true
+      RepositoryName: crowdstrike/falcon-sensor
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Sid: AllowPushPull
+            Effect: Allow
+            Principal: 
+              AWS: 
+                - !GetAtt EKSCodeBuildRole.Arn
+            Action: 
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:BatchGetImage"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:PutImage"
+              - "ecr:InitiateLayerUpload"
+              - "ecr:UploadLayerPart"
+              - "ecr:CompleteLayerUpload"
+  KPAgentRepo:
+    Type: AWS::ECR::Repository
+    Condition: UseECR
+    Properties:
+      EmptyOnDelete: true
+      RepositoryName: crowdstrike/kpagent
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Sid: AllowPushPull
+            Effect: Allow
+            Principal: 
+              AWS: 
+                - !GetAtt EKSCodeBuildRole.Arn
+            Action: 
+              - "ecr:GetDownloadUrlForLayer"
+              - "ecr:BatchGetImage"
+              - "ecr:BatchCheckLayerAvailability"
+              - "ecr:PutImage"
+              - "ecr:InitiateLayerUpload"
+              - "ecr:UploadLayerPart"
+              - "ecr:CompleteLayerUpload"
