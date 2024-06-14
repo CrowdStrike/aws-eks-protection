@@ -1,9 +1,43 @@
 ---
 AWSTemplateFormatVersion: '2010-09-09'
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Source S3 Bucket - Must be same Region as this stack
+        Parameters:
+          - EKSS3Bucket
+      - Label:
+          default: CrowdStrike Falcon Credentials
+        Parameters:
+          - FalconClientId
+          - FalconClientSecret
+          - FalconCID
+          - CrowdStrikeCloud
+          - DockerAPIToken
+      - Label:
+          default: EKS Sensor Configuration
+        Parameters:
+          - Registry
+          - Backend
+          - EnableKAC
+      - Label:
+          default: CodeBuild Configuration
+        Parameters:
+          - CodeBuildProject
+          - CodeBuildRole
+          - KubernetesUserName
 
 Parameters:
   EKSS3Bucket:
     Type: String
+  EnableEKS:
+    Type: String
+    Description: Enable CrowdStrike Automatic Sensor Deployment for EKS
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
   Backend:
     Type: String
     Description: kernel or bpf for Daemonset Sensor
@@ -58,7 +92,8 @@ Conditions:
   UseECR: !Equals [ !Ref 'Registry', 'ecr' ]
 
 Resources:
- # EventBridge Resources to Invoke Lambda
+
+  # EventBridge Resources to Invoke Lambda
   EKSEventBus: 
     Type: AWS::Events::EventBus
     Properties: 
@@ -116,10 +151,10 @@ Resources:
       Role: !GetAtt "EKSLambdaRole.Arn"
       Runtime: python3.11
       Timeout: 300
-      FunctionName: crowdstrike-abi-eks-function
+      FunctionName: crowdstrike-abi-eks-events-function
       Code:
         S3Bucket: !Ref EKSS3Bucket
-        S3Key: lambda.zip
+        S3Key: new_clusters_lambda_function.zip
   EKSInvokeLambdaPermission: 
     Type: AWS::Lambda::Permission
     DependsOn: EKSLambda
@@ -151,12 +186,41 @@ Resources:
               - Effect: Allow
                 Action: 
                   - eks:DescribeCluster
+                  - eks:ListClusters
+                  - eks:ListFargateProfiles
+                  - ec2:DescribeRegions
                 Resource: '*'
               - Effect: Allow
                 Action:
                   - codebuild:StartBuild
                 Resource:
                   - !Sub 'arn:${AWS::Partition}:codebuild:*:${AWS::AccountId}:project/${CodeBuildProject}'
+  ExistingEKSLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Environment:
+        Variables:
+          project_name: !Ref CodeBuildProject
+          artifact_bucket: !Ref EKSS3Bucket
+      Handler: lambda_function.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt "EKSLambdaRole.Arn"
+      Runtime: python3.11
+      Timeout: 300
+      FunctionName: crowdstrike-abi-eks-init-function
+      Code:
+        S3Bucket: !Ref EKSS3Bucket
+        S3Key: existing_clusters_lambda_function.zip
+  # Trigger Lambda Function
+  TriggerExistingEKSLambda:
+    Type: 'Custom::TriggerLambda'
+    DependsOn:
+      - EKSCodeBuildRole
+      - SMFalconAPIKey
+    Properties:
+      ServiceToken: !GetAtt
+        - ExistingEKSLambda
+        - Arn
 
   # CodeBuild Project to deploy Falcon Operator and Sensor
   EKSCodeBuild:
@@ -351,20 +415,6 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:crowdstrike-eks-secret-*'
 
- # Secret for CodeBuild to access Falcon API Credentials
-  # CodeBuildSecret:
-  #   Type: AWS::SecretsManager::Secret
-  #   Properties:
-  #     Description: !Sub 'CrowdStrike Falcon API Creds for ${CodeBuildProject}'
-  #     Name: crowdstrike-eks-secret
-  #     SecretString:
-  #       Fn::Join:
-  #         - ''
-  #         - - '{"FalconClientId":"'
-  #           - Ref: FalconClientId
-  #           - '","FalconClientSecret": "'
-  #           - Ref: FalconClientSecret
-  #           - '"}'
   SMFalconAPIKey:
     Type: AWS::SecretsManager::Secret
     Properties:

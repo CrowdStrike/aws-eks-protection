@@ -18,7 +18,7 @@ Metadata:
       - Label:
           default: Stackset Configuration
         Parameters:
-          - AdministrationRoleARN
+          - AdministrationRoleName
           - ExecutionRoleName
           - Regions
       - Label:
@@ -35,12 +35,12 @@ Metadata:
           - KubernetesUserName
 
 Parameters:
-  AdministrationRoleARN: 
+  AdministrationRoleName: 
     Type: String
-    Default: arn:aws:iam::622266429069:role/AWS-QuickSetup-StackSet-Local-AdministrationRole
+    Default: AWSCloudFormationStackSetAdministrationRole
   ExecutionRoleName: 
     Type: String
-    Default: AWS-QuickSetup-StackSet-Local-ExecutionRole
+    Default: AWSCloudFormationStackSetExecutionRole
   EKSS3Bucket:
     Type: String
   EnableEKS:
@@ -154,7 +154,7 @@ Resources:
   EKSEventBridgeStackSet:
     Type: AWS::CloudFormation::StackSet
     Properties:
-      AdministrationRoleARN: !Ref AdministrationRoleARN
+      AdministrationRoleARN: !Sub arn:{AWS::Partition}:iam::{AWS::AccountId}:role/{AdministrationRoleName}
       ExecutionRoleName: !Ref ExecutionRoleName
       StackSetName: "CrowdStrike-EKS-EB-Stackset"
       Parameters:
@@ -173,7 +173,51 @@ Resources:
             Accounts:
               - !Ref AWS::AccountId
           Regions: !Ref Regions
-      TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eventbridge_stackset.yml
+      #TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eventbridge_stackset.yml
+      TemplateBody: |
+        {
+          "AWSTemplateFormatVersion": "2010-09-09",
+          "Parameters": {
+            "EventBusArn": {
+              "Type": "String"
+            },
+            "EventBridgeRole": {
+              "Type": "String"
+            }
+          },
+          "Resources": {
+            "EKSRule": {
+              "Type": "AWS::Events::Rule",
+              "Properties": {
+                "Description": "Invoke CrowdStrike EKS Lambda when nodegroups or Fargate profiles are created.",
+                "EventPattern": {
+                  "source": [
+                    "aws.eks"
+                  ],
+                  "detail-type": "AWS API Call via CloudTrail",
+                  "detail": {
+                    "eventSource": [
+                      "eks.amazonaws.com"
+                    ],
+                    "eventName": [
+                      "CreateCluster",
+                      "CreateFargateProfile"
+                    ]
+                  }
+                },
+                "State": "ENABLED",
+                "Name": "crowdstrike-eks-rule",
+                "Targets": [
+                  {
+                    "Arn": {"Ref": "EventBusArn"},
+                    "Id": "CrowdStrikeEKSFunction",
+                    "RoleArn": {"Ref": "EventBridgeRole"}
+                  }
+                ]
+              }
+            }
+          }
+        }
 
   # Lambda Function to process event, check for EKS API Access and StartBuild
   EKSLambda:
@@ -188,7 +232,7 @@ Resources:
       Role: !GetAtt "EKSLambdaRole.Arn"
       Runtime: python3.11
       Timeout: 300
-      FunctionName: crowdstrike-abi-eks-function
+      FunctionName: crowdstrike-abi-eks-events-function
       Code:
         S3Bucket: !Ref EKSS3Bucket
         S3Key: new_clusters_lambda_function.zip
@@ -242,7 +286,7 @@ Resources:
       Role: !GetAtt "EKSLambdaRole.Arn"
       Runtime: python3.11
       Timeout: 300
-      FunctionName: crowdstrike-abi-eks-function
+      FunctionName: crowdstrike-abi-eks-init-function
       Code:
         S3Bucket: !Ref EKSS3Bucket
         S3Key: existing_clusters_lambda_function.zip

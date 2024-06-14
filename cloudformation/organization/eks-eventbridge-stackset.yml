@@ -1,7 +1,12 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+
 Parameters:
-  EventBusArn:
+  EventBusName:
     Type: String
-  EventBridgeRole:
+  EventBusRegion:
+    Type: String
+  EventBridgeRoleName:
     Type: String
 
 Resources:
@@ -22,7 +27,7 @@ Resources:
             - "CreateFargateProfile"
       State: "ENABLED"
       Name: crowdstrike-eks-rule
-      Targets: 
-        - Arn: !Ref EventBusArn
+      Targets:      
+        - Arn: !Sub arn:${AWS::Partition}:events:${EventBusRegion}:${AWS::AccountId}:event-bus/${EventBusName}
           Id: "CrowdStrikeEKSFunction"
-          RoleArn: !Ref EventBridgeRole
+          RoleArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${EventBridgeRoleName}
