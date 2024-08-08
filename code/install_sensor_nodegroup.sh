@@ -1,6 +1,18 @@
 #!/bin/bash
+
+role_arn=arn:aws:iam::${ACCOUNT_ID}:role/${SWITCH_ROLE}
+OUT=$(aws sts assume-role --role-arn $role_arn --role-session-name crowdstrike-eks-codebuild);\
+export AWS_ACCESS_KEY_ID=$(echo $OUT | jq -r '.Credentials''.AccessKeyId');\
+export AWS_SECRET_ACCESS_KEY=$(echo $OUT | jq -r '.Credentials''.SecretAccessKey');\
+export AWS_SESSION_TOKEN=$(echo $OUT | jq -r '.Credentials''.SessionToken');
+
 echo "Creating kubeconfig for $CLUSTER"
 aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER
+
+export AWS_ACCESS_KEY_ID=""
+export AWS_SECRET_ACCESS_KEY=""
+export AWS_SESSION_TOKEN=""
+
 pods=$(kubectl get pods -A)
 case "$pods" in 
     *kpagent*) 

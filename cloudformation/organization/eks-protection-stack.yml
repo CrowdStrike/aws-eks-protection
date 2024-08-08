@@ -1,43 +1,9 @@
 ---
 AWSTemplateFormatVersion: '2010-09-09'
-Metadata:
-  AWS::CloudFormation::Interface:
-    ParameterGroups:
-      - Label:
-          default: Source S3 Bucket - Must be same Region as this stack
-        Parameters:
-          - EKSS3Bucket
-      - Label:
-          default: CrowdStrike Falcon Credentials
-        Parameters:
-          - FalconClientId
-          - FalconClientSecret
-          - FalconCID
-          - CrowdStrikeCloud
-          - DockerAPIToken
-      - Label:
-          default: EKS Sensor Configuration
-        Parameters:
-          - Registry
-          - Backend
-          - EnableKAC
-      - Label:
-          default: CodeBuild Configuration
-        Parameters:
-          - CodeBuildProject
-          - CodeBuildRole
-          - KubernetesUserName
 
 Parameters:
   EKSS3Bucket:
     Type: String
-  EnableEKS:
-    Type: String
-    Description: Enable CrowdStrike Automatic Sensor Deployment for EKS
-    AllowedValues:
-      - 'true'
-      - 'false'
-    Default: 'true'
   Backend:
     Type: String
     Description: kernel or bpf for Daemonset Sensor
@@ -67,12 +33,11 @@ Parameters:
       - 'us-2'
       - 'eu-1'
     Default: 'us-1'
-  CodeBuildProject:
+  EventBusName:
     Type: String
-    Default: "crowdstrike-eks-codebuild"
-  CodeBuildRole:
+    Default: "crowdstrike-eks-eventbus"
+  OrganizationId:
     Type: String
-    Default: "crowdstrike-eks-codebuild-role"
   FalconClientId:
     Type: String
     NoEcho: true
@@ -87,17 +52,68 @@ Parameters:
   DockerAPIToken:
     Type: String
     NoEcho: true
+  EKSExecutionRoleName:
+    Type: String
+    Default: crowdstrike-eks-execution-role
+  CodeBuildProjectName:
+    Type: String
+    Default: crowdstrike-eks-codebuild
+  CodeBuildRoleName:
+    Type: String
+    Default: crowdstrike-eks-codebuild-role
+  EventBridgeRoleName:
+    Type: String
+    Default: crowdstrike-eks-eventbridge-role
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+    Default: crowdstrike-eks
+  VpcCIDR:
+    Description: Please enter the IP range (CIDR notation) for this VPC
+    Type: String
+    Default: 10.192.0.0/16
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.10.0/24
+  PublicSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the public subnet in the second Availability Zone
+    Type: String
+    Default: 10.192.11.0/24
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the first Availability Zone
+    Type: String
+    Default: 10.192.20.0/24
+  PrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for the private subnet in the second Availability Zone
+    Type: String
+    Default: 10.192.21.0/24
 
 Conditions:
   UseECR: !Equals [ !Ref 'Registry', 'ecr' ]
 
 Resources:
-
   # EventBridge Resources to Invoke Lambda
   EKSEventBus: 
     Type: AWS::Events::EventBus
     Properties: 
-        Name: "crowdstrike-eks-eventbus"
+        Name: !Ref EventBusName
+        Policy: |
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Sid": "AllowAllAccountsFromOrganizationToPutEvents",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "events:PutEvents",
+              "Resource": "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}",
+              "Condition": {
+                "StringEquals": {
+                  "aws:PrincipalOrgID": "${OrganizationId}"
+                }
+              }
+            }]
+          }
   EKSRule: 
     Type: AWS::Events::Rule
     Properties: 
@@ -119,24 +135,6 @@ Resources:
       Targets: 
         - Arn: !GetAtt EKSLambda.Arn
           Id: "CrowdStrikeEKSFunction"
-  EKSEventBridgeRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-        - Effect: Allow
-          Principal:
-            Service: events.amazonaws.com
-          Action: sts:AssumeRole
-      Policies:
-      - PolicyName: crowdstrike-eks-eb-role
-        PolicyDocument:
-          Version: 2012-10-17
-          Statement:
-          - Effect: Allow
-            Action: events:PutEvents
-            Resource: !GetAtt EKSEventBus.Arn
 
   # Lambda Function to process event, check for EKS API Access and StartBuild
   EKSLambda:
@@ -144,11 +142,12 @@ Resources:
     Properties:
       Environment:
         Variables:
-          project_name: !Ref CodeBuildProject
+          project_name: !Ref CodeBuildProjectName
           artifact_bucket: !Ref EKSS3Bucket
+          lambda_switch_role: !Ref EKSExecutionRoleName
       Handler: lambda_function.lambda_handler
       MemorySize: 128
-      Role: !GetAtt "EKSLambdaRole.Arn"
+      Role: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${EKSExecutionRoleName}
       Runtime: python3.11
       Timeout: 300
       FunctionName: crowdstrike-abi-eks-events-function
@@ -163,48 +162,17 @@ Resources:
       Action: "lambda:InvokeFunction"
       Principal: "events.amazonaws.com"
       SourceArn: !GetAtt EKSRule.Arn
-  EKSLambdaRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      RoleName: crowdstrike-eks-lambda-role
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - lambda.amazonaws.com
-            Action:
-              - 'sts:AssumeRole'
-      ManagedPolicyArns:
-        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
-      Policies:
-        - PolicyName: crowdstrike-eks-lambda-policy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: 
-                  - eks:DescribeCluster
-                  - eks:ListClusters
-                  - eks:ListFargateProfiles
-                  - ec2:DescribeRegions
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - codebuild:StartBuild
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:codebuild:*:${AWS::AccountId}:project/${CodeBuildProject}'
   ExistingEKSLambda:
     Type: AWS::Lambda::Function
     Properties:
       Environment:
         Variables:
-          project_name: !Ref CodeBuildProject
+          project_name: !Ref CodeBuildProjectName
           artifact_bucket: !Ref EKSS3Bucket
+          lambda_switch_role: !Ref EKSExecutionRoleName
       Handler: lambda_function.lambda_handler
       MemorySize: 128
-      Role: !GetAtt "EKSLambdaRole.Arn"
+      Role: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${EKSExecutionRoleName}
       Runtime: python3.11
       Timeout: 300
       FunctionName: crowdstrike-abi-eks-init-function
@@ -215,7 +183,6 @@ Resources:
   TriggerExistingEKSLambda:
     Type: 'Custom::TriggerLambda'
     DependsOn:
-      - EKSCodeBuildRole
       - SMFalconAPIKey
     Properties:
       ServiceToken: !GetAtt
@@ -252,7 +219,7 @@ Resources:
             Type: SECRETS_MANAGER
           - Name: PRINCIPAL_ARN
             Type: PLAINTEXT
-            Value: !GetAtt EKSCodeBuildRole.Arn
+            Value: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CodeBuildRoleName}
           - Name: S3_BUCKET
             Type: PLAINTEXT
             Value: !Ref EKSS3Bucket
@@ -280,9 +247,6 @@ Resources:
           - Name: CROWDSTRIKE_CLOUD
             Type: PLAINTEXT
             Value: !Ref CrowdStrikeCloud
-          - Name: ACCOUNT_ID
-            Type: PLAINTEXT
-            Value: !Ref AWS::AccountId
           - Name: BACKEND
             Type: PLAINTEXT
             Value: !Ref Backend
@@ -295,126 +259,38 @@ Resources:
           - Name: NODE_SENSOR_URI
             Type: PLAINTEXT
             Value: !If [ UseECR, !GetAtt NodeSensorRepo.RepositoryUri, 'CrowdStrike' ]
+          - Name: ACCOUNT_ID
+            Type: PLAINTEXT
+            Value: lambda
+          - Name: REGION
+            Type: PLAINTEXT
+            Value: lambda
+          - Name: SWITCH_ROLE
+            Type: PLAINTEXT
+            Value: !Ref EKSExecutionRoleName
+          - Name: NAT_IP
+            Type: PLAINTEXT
+            Value: !GetAtt NatGatewayEIP.PublicIp
         Image: aws/codebuild/standard:7.0
         PrivilegedMode: true
         Type: LINUX_CONTAINER
+      VpcConfig:
+        SecurityGroupIds: 
+          - !GetAtt NoIngressSecurityGroup.GroupId
+        Subnets: 
+          - !GetAtt PrivateSubnet1.SubnetId
+        VpcId: !GetAtt VPC.VpcId
       Artifacts:
         Type: NO_ARTIFACTS
-      Name: !Ref CodeBuildProject
-      ServiceRole: !GetAtt EKSCodeBuildRole.Arn
+      Name: !Ref CodeBuildProjectName
+      ServiceRole: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CodeBuildRoleName}
       Source: 
         Location: !Sub '${EKSS3Bucket}/eks_build.zip'
         Type: S3
       TimeoutInMinutes: 90
       Visibility: PRIVATE
-  EKSCodeBuildRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      RoleName: !Ref CodeBuildRole
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - codebuild.amazonaws.com
-            Action:
-              - 'sts:AssumeRole'
-      Policies:
-        - PolicyName: codebuild-base-policy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: 
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${CodeBuildProject}'
-                  - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${CodeBuildProject}:*'
-              - Effect: Allow
-                Action:
-                  - s3:PutObject
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                  - s3:GetBucketAcl
-                  - s3:GetBucketLocation
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:s3:::codepipeline-${AWS::Region}-*'
-              - Effect: Allow
-                Action:
-                  - codebuild:CreateReportGroup
-                  - codebuild:CreateReport
-                  - codebuild:UpdateReport
-                  - codebuild:BatchPutTestCases
-                  - codebuild:BatchPutCodeCoverages
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${CodeBuildProject}-*'
-        - PolicyName: codebuild-s3-readonly-policy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action: 
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:s3:::${EKSS3Bucket}/buildspec.yml'
-                  - !Sub 'arn:${AWS::Partition}:s3:::${EKSS3Bucket}/*'
-              - Effect: Allow
-                Action:
-                  - s3:ListBucket
-                  - s3:GetBucketAcl
-                  - s3:GetBucketLocation
-                Resource:
-                  - !Sub 'arn:${AWS::Partition}:s3:::${EKSS3Bucket}'
-        - PolicyName: codebuild-eks-policy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - eks:DescribeFargateProfile
-                  - eks:ListAccessEntries
-                  - eks:ListAssociatedAccessPolicies
-                  - eks:DescribeNodegroup
-                  - eks:ListIdentityProviderConfigs
-                  - eks:ListNodegroups
-                  - eks:DescribeAccessEntry
-                  - eks:ListFargateProfiles
-                  - eks:DescribeIdentityProviderConfig
-                  - eks:DescribeUpdate
-                  - eks:AccessKubernetesApi
-                  - eks:DescribeCluster
-                  - eks:ListClusters
-                  - eks:ListAccessPolicies
-                  - eks:AssociateIdentityProviderConfig
-                  - eks:AssociateAccessPolicy
-                  - eks:DisassociateAccessPolicy
-                  - ecr:GetAuthorizationToken
-                  - ecr:ListImages
-                  - ecr:InitiateLayerUpload
-                  - ecr:CreateRepository
-                  - ecr:CompleteLayerUpload
-                  - ecr:PutImage
-                  - iam:CreateOpenIDConnectProvider
-                  - iam:GetOpenIDConnectProvider
-                Resource: '*'
-              - Effect: Allow
-                Action:
-                  - eks:UpdateAccessEntry
-                  - eks:CreateAccessEntry
-                  - eks:DeleteAccessEntry
-                Resource: 
-                  - !Sub 'arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/*'
-                  - !Sub 'arn:${AWS::Partition}:eks:*:${AWS::AccountId}:access-entry/*/${CodeBuildRole}/${AWS::AccountId}/$/*'
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource:
-                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:crowdstrike-eks-secret-*'
 
+# Secret
   SMFalconAPIKey:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -444,7 +320,7 @@ Resources:
             Effect: Allow
             Principal: 
               AWS: 
-                - !GetAtt EKSCodeBuildRole.Arn
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CodeBuildRoleName}
             Action: 
               - "ecr:GetDownloadUrlForLayer"
               - "ecr:BatchGetImage"
@@ -467,7 +343,7 @@ Resources:
             Effect: Allow
             Principal: 
               AWS: 
-                - !GetAtt EKSCodeBuildRole.Arn
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${CodeBuildRoleName}
             Action: 
               - "ecr:GetDownloadUrlForLayer"
               - "ecr:BatchGetImage"
@@ -476,3 +352,145 @@ Resources:
               - "ecr:InitiateLayerUpload"
               - "ecr:UploadLayerPart"
               - "ecr:CompleteLayerUpload"
+
+  # Network
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref EnvironmentName
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs '' ]
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet (AZ1)
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs  '' ]
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Subnet (AZ2)
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 0, !GetAZs  '' ]
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet (AZ1)
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [ 1, !GetAZs  '' ]
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Subnet (AZ2)
+
+  NatGatewayEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGatewayEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Public Routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName} Private Routes (AZ1)
+
+  DefaultPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+  NoIngressSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: "no-ingress-sg"
+      GroupDescription: "Security group with no ingress rule"
+      VpcId: !Ref VPC

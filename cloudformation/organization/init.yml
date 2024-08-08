@@ -1,5 +1,6 @@
 ---
 AWSTemplateFormatVersion: '2010-09-09'
+
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -21,139 +22,176 @@ Metadata:
           - Regions
           - ProvisionOU
       - Label:
-          default: Event Configuration
+          default: Resource Names
         Parameters:
           - EventBusName
           - EventBridgeRoleName
+          - CodeBuildProjectName
+          - CodeBuildRoleName
+          - KubernetesUserName
+          - EKSExecutionRoleName
       - Label:
-          default: EKS Sensor Configuration
+          default: Sensor Configuration
         Parameters:
           - Registry
           - Backend
           - EnableKAC
       - Label:
-          default: CodeBuild Configuration
+          default: CodeBuild VPC Configuration
         Parameters:
-          - CodeBuildProject
-          - CodeBuildRole
-          - KubernetesUserName
+          - VpcCIDR
+          - PublicSubnet1CIDR
+          - PublicSubnet2CIDR
+          - PrivateSubnet1CIDR
+          - PrivateSubnet2CIDR
 
 Parameters:
-  EventBridgeRoleName: 
-    Type: String
-    Default: CrowdStrikeEKSProtectionRole
-  EventBusName: 
-    Type: String
-    Default: CrowdStrikeEKSProtectionEventBus
   EKSS3Bucket:
     Type: String
-    Default: paynecloud-org-bucket
-  EnableEKS:
+
+  FalconClientId:
     Type: String
-    Description: Enable CrowdStrike Automatic Sensor Deployment for EKS
-    AllowedValues:
-      - 'true'
-      - 'false'
-    Default: 'true'
-  Backend:
+    NoEcho: true
+    Description: Your Falcon API Client Id
+  FalconClientSecret:
     Type: String
-    Description: kernel or bpf for Daemonset Sensor
+    NoEcho: true
+    Description: Your Falcon API Client Secret
+  FalconCID:
+    Type: String
+    Description: Your Falcon CID with checksum (eg. ********************************-**)
+  CrowdStrikeCloud:
+    Type: String
+    Description: Cloud for your Falcon CID (eg. us-1, us-2 or eu-1)
     AllowedValues:
-      - 'kernel'
-      - 'bpf'
-    Default: 'kernel'
+      - us-1
+      - us-2
+      - eu-1
+    Default: us-1
+  DockerAPIToken:
+    Type: String
+    NoEcho: true
+    Description: Your Falcon Docker API Token
+
+  OrganizationId:
+    Type: String
+    Description: Your AWS Organization ID (eg. o-********)
+  Regions:
+    Type: CommaDelimitedList
+    Description: Regions to deploy EventBridge Rules
+  ProvisionOU:
+    Type: CommaDelimitedList
+    Description: OUs to deploy this solution.  To cover the entire org, use the root OU (eg. r-****)
+  EventBusAccount:
+    Description: The account to centralize compute resources.  This account must be the Organization Management Account or a Delegated Administrator.  If you are currently launching in the account
+    Type: String
+
+  EventBusName:
+    Type: String
+    Description: Name of the centralized EventBus
+    Default: crowdstrike-eks-eventbus
+  EventBridgeRoleName:
+    Type: String
+    Description: Name of the EventBridge IAM role
+    Default: crowdstrike-eks-eventbridge-role
+  EKSExecutionRoleName:
+    Type: String
+    Description: Name of the Target Execution IAM role
+    Default: crowdstrike-eks-execution-role
+  CodeBuildProjectName:
+    Type: String
+    Description: Name of the CodeBuild Project
+    Default: crowdstrike-eks-codebuild
+  CodeBuildRoleName:
+    Type: String
+    Description: Name of the CodeBuild IAM role
+    Default: crowdstrike-eks-codebuild-role
+  KubernetesUserName:
+    Type: String
+    Description: Name of the Kubernetes UserName
+    Default: crowdstrike-eks
+
   Registry:
     Type: String
     Description: Source Falcon Image from CrowdStrike or mirror to ECR
     AllowedValues:
       - 'crowdstrike'
       - 'ecr'
-    Default: 'crowdstrike'
+    Default: crowdstrike
+  Backend:
+    Type: String
+    Description: kernel or bpf for Daemonset Sensor
+    AllowedValues:
+      - 'kernel'
+      - 'bpf'
+    Default: kernel
   EnableKAC:
     Type: String
     Description: Deploy Kubernetes Admission Controller (KAC).  For more info see https://falcon.crowdstrike.com/documentation/page/aa4fccee/container-security#s41cbec3
     AllowedValues:
-      - 'true'
-      - 'false'
-    Default: 'true'
-  CrowdStrikeCloud:
-    Type: String
-    Description: Cloud for your Falcon CID (eg. us-1, us-2 or eu-1)
-    AllowedValues:
-      - 'us-1'
-      - 'us-2'
-      - 'eu-1'
-    Default: 'us-1'
-  CodeBuildProject:
-    Type: String
-    Default: "crowdstrike-eks-codebuild"
-  CodeBuildRole:
-    Type: String
-    Default: "crowdstrike-eks-codebuild-role"
-  FalconClientId:
-    Type: String
-    NoEcho: true
-    Default: ''
-  FalconClientSecret:
-    Type: String
-    NoEcho: true
-    Default: ''
-  Regions:
-    Type: CommaDelimitedList
-    Default: ''
-  ProvisionOU:
-    Type: CommaDelimitedList
-    Default: ''
-  KubernetesUserName:
-    Type: String
-    Default: crowdstrike-eks
-  FalconCID:
-    Type: String
-    Default: ''
-  DockerAPIToken:
-    Type: String
-    NoEcho: true
-    Default: ''
+      - true
+      - false
+    Default: true
 
-Conditions:
-  UseECR: !Equals [ !Ref 'Registry', 'ecr' ]
+  VpcCIDR:
+    Description: CIDR for the CodeBuild VPC
+    Type: String
+    Default: 10.192.0.0/16
+  PublicSubnet1CIDR:
+    Description: CIDR for the public subnet in the first Availability Zone of the CodeBuild VPC
+    Type: String
+    Default: 10.192.10.0/24
+  PublicSubnet2CIDR:
+    Description: CIDR for the public subnet in the second Availability Zone of the CodeBuild VPC
+    Type: String
+    Default: 10.192.11.0/24
+  PrivateSubnet1CIDR:
+    Description: CIDR for the private subnet in the first Availability Zone of the CodeBuild VPC
+    Type: String
+    Default: 10.192.20.0/24
+  PrivateSubnet2CIDR:
+    Description: CIDR for the private subnet in the second Availability Zone of the CodeBuild VPC
+    Type: String
+    Default: 10.192.21.0/24
 
 Resources:
-  EKSSetupStackSet:
+  RootRolesStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Capabilities: 
+        - CAPABILITY_NAMED_IAM
+      Parameters: 
+        CodeBuildProjectName: !Ref CodeBuildProjectName
+        CodeBuildRoleName: !Ref CodeBuildRoleName
+        EventBridgeRoleName: !Ref EventBridgeRoleName
+        EKSExecutionRoleName: !Ref EKSExecutionRoleName
+        EKSS3Bucket: !Ref EKSS3Bucket
+        EventBusName: !Ref EventBusName
+      StackName: crowdstrike-eks-protection-root-roles
+      TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-root-roles.yml
+
+  EKSTargetRolesStackSet:
+    DependsOn: RootRolesStack
     Type: AWS::CloudFormation::StackSet
     Properties:
-      StackSetName: "CrowdStrike-EKS-SetUp-Stackset"
+      StackSetName: crowdstrike-eks-protection-target-roles
       Capabilities:
         - CAPABILITY_NAMED_IAM
       Parameters:
-        - ParameterKey: EKSS3Bucket
-          ParameterValue: !Ref EKSS3Bucket
-        - ParameterKey: FalconClientId
-          ParameterValue: !Ref FalconClientId
-        - ParameterKey: FalconClientSecret
-          ParameterValue: !Ref FalconClientSecret
-        - ParameterKey: FalconCID
-          ParameterValue: !Ref FalconCID
-        - ParameterKey: CrowdStrikeCloud
-          ParameterValue: !Ref CrowdStrikeCloud
-        - ParameterKey: DockerAPIToken
-          ParameterValue: !Ref DockerAPIToken
-        - ParameterKey: Registry
-          ParameterValue: !Ref Registry
-        - ParameterKey: Backend
-          ParameterValue: !Ref Backend
-        - ParameterKey: EnableKAC
-          ParameterValue: !Ref EnableKAC
-        - ParameterKey: CodeBuildProject
-          ParameterValue: !Ref CodeBuildProject
-        - ParameterKey: CodeBuildRole
-          ParameterValue: !Ref CodeBuildRole
-        - ParameterKey: KubernetesUserName
-          ParameterValue: !Ref KubernetesUserName
+        - ParameterKey: EKSExecutionRoleName
+          ParameterValue: !Ref EKSExecutionRoleName
+        - ParameterKey: EventBridgeRoleName
+          ParameterValue: !Ref EventBridgeRoleName
+        - ParameterKey: EventBusAccount
+          ParameterValue: !Ref EventBusAccount
+        - ParameterKey: EventBusName
+          ParameterValue: !Ref EventBusName
+        - ParameterKey: CodeBuildRoleName
+          ParameterValue: !Ref CodeBuildRoleName
       PermissionModel: SERVICE_MANAGED
       AutoDeployment:
         Enabled: true
-        RetainStacksOnAccountRemoval: true
+        RetainStacksOnAccountRemoval: false
       OperationPreferences:
         MaxConcurrentPercentage: 100
         FailureTolerancePercentage: 50
@@ -164,14 +202,13 @@ Resources:
             OrganizationalUnitIds: !Ref ProvisionOU
           Regions:
             - !Ref AWS::Region
-      TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-protection-stackset.yml
+      TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-target-roles-stackset.yml
 
   EKSEventBridgeStackSet:
+    DependsOn: EKSTargetRolesStackSet
     Type: AWS::CloudFormation::StackSet
-    DependsOn:
-      - EKSSetupStackSet
     Properties:
-      StackSetName: "CrowdStrike-EKS-EB-Stackset"
+      StackSetName: crowdstrike-eks-protection-eventbridge
       Parameters:
         - ParameterKey: EventBusName
           ParameterValue: !Ref EventBusName
@@ -193,3 +230,33 @@ Resources:
             OrganizationalUnitIds: !Ref ProvisionOU
           Regions: !Ref Regions
       TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-eventbridge-stackset.yml
+
+  RootEKSProtectionStack:
+    DependsOn: EKSTargetRolesStackSet
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters: 
+        EKSS3Bucket: !Ref EKSS3Bucket
+        Backend: !Ref Backend
+        Registry: !Ref Registry
+        EnableKAC: !Ref EnableKAC
+        CrowdStrikeCloud: !Ref CrowdStrikeCloud
+        EventBusName: !Ref EventBusName
+        OrganizationId: !Ref OrganizationId
+        FalconClientId: !Ref FalconClientId
+        FalconClientSecret: !Ref FalconClientSecret
+        KubernetesUserName: !Ref KubernetesUserName
+        FalconCID: !Ref FalconCID
+        DockerAPIToken: !Ref DockerAPIToken
+        EKSExecutionRoleName: !Ref EKSExecutionRoleName
+        CodeBuildProjectName: !Ref CodeBuildProjectName
+        CodeBuildRoleName: !Ref CodeBuildRoleName
+        EventBridgeRoleName: !Ref EventBridgeRoleName
+        EnvironmentName: !Ref EnvironmentName
+        VpcCIDR: !Ref VpcCIDR
+        PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
+        PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+        PrivateSubnet1CIDR: !Ref PrivateSubnet1CIDR
+        PrivateSubnet2CIDR: !Ref PrivateSubnet2CIDR
+      StackName: crowdstrike-eks-protection
+      TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-protection-stack.yml

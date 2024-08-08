@@ -17,8 +17,115 @@ DATE = date.today()
 PROJECT = os.environ['project_name']
 BUCKET = os.environ['artifact_bucket']
 REGION = os.environ['AWS_DEFAULT_REGION']
+SWITCH_ROLE = os.environ['lambda_switch_role']
 
-def start_build(clusterName, cluster_arn, node_type):
+def accounts():
+    try:
+        session = boto3.session.Session()
+        client = session.client(
+            service_name='organizations',
+            region_name=REGION
+        )
+        response = client.list_accounts()
+        accounts = response['Accounts']
+        next_token = response.get('NextToken', None)
+
+        while next_token:
+            response = client.list_accounts(NextToken=next_token)
+            accounts += response['Accounts']
+            next_token = response.get('NextToken', None)
+
+        active_accounts = [a for a in accounts if a['Status'] == 'ACTIVE']
+        return active_accounts
+    except client.exceptions.AccessDeniedException:
+        print("Cannot autodiscover adjacent accounts: cannot list accounts within the AWS organization")
+        return None
+
+def new_session(account_id, region):
+    try:
+        sts_connection = boto3.client('sts')
+        credentials = sts_connection.assume_role(
+            RoleArn=f'arn:aws:iam::{account_id}:role/{SWITCH_ROLE}',
+            RoleSessionName=f'crowdstrike-eks-{account_id}'
+        )
+        return boto3.session.Session(
+            aws_access_key_id=credentials['Credentials']['AccessKeyId'],
+            aws_secret_access_key=credentials['Credentials']['SecretAccessKey'],
+            aws_session_token=credentials['Credentials']['SessionToken'],
+            region_name=region
+        )
+    except sts_connection.exceptions.ClientError as exc:
+        # Print the error and continue.
+        # Handle what to do with accounts that cannot be accessed
+        # due to assuming role errors.
+        print("Cannot access adjacent account: ", account_id, exc)
+        return None
+
+
+def regions():
+    session = boto3.session.Session()
+    client = session.client(
+        service_name='ec2',
+        region_name=REGION
+    )
+
+    regions = client.describe_regions()['Regions']
+    return regions
+
+
+def clusters(session, region_name):
+    client = session.client(
+        service_name='eks',
+        region_name=region_name
+    )
+
+    response = client.list_clusters(maxResults=100)
+    clusters = response['clusters']
+    next_token = response['NextToken'] if 'NextToken' in response else None
+
+    while next_token:
+        response = client.list_clusters(maxResults=100, NextToken=next_token)
+        clusters += response['clusters']
+        next_token = response['NextToken'] if 'NextToken' in response else None
+
+    return clusters
+
+def describe_cluster(session, region_name, cluster_name):
+    client = session.client(
+        service_name='eks',
+        region_name=region_name
+    )
+
+    response = client.describe_cluster(name=cluster_name)
+    cluster_arn = response.get('cluster', {}).get('arn')
+    auth_mode = response.get('cluster', {}).get('accessConfig', {}).get('authenticationMode')
+    public_endpoint = response.get('cluster', {}).get('resourcesVpcConfig', {}).get('endpointPublicAccess')
+
+    return cluster_arn, auth_mode, public_endpoint
+
+def check_fargate(session, region_name, cluster_name):
+    client = session.client(
+        service_name='eks',
+        region_name=region_name
+    )
+
+    try:
+        response = client.list_fargate_profiles(
+            clusterName=cluster_name,
+            maxResults=10
+        )
+        if response['fargateProfileNames'] not in []:
+            logger.info('No fargate profiles found, setting node_type to nodegroup...')
+            node_type = 'nodegroup'
+            return node_type
+        else:
+            node_type = 'fargate'
+            return node_type
+    except botocore.exceptions.ClientError as error:
+        logger.error(error)
+        return None
+
+def start_build(cluster_name, cluster_arn, node_type, account_id, region_name):
     try:
         session = boto3.session.Session()
         client = session.client(
@@ -31,13 +138,13 @@ def start_build(clusterName, cluster_arn, node_type):
                 'type': 'S3',
                 'location': f'{BUCKET}',
                 'path': 'BuildResults',
-                'name': f'{clusterName}-{DATE}',
+                'name': f'{cluster_name}-{DATE}',
                 'packaging': 'ZIP'
             },
             environmentVariablesOverride=[
                 {
                     'name': 'CLUSTER',
-                    'value': f'{clusterName}',
+                    'value': f'{cluster_name}',
                     'type': 'PLAINTEXT'
                 },
                 {
@@ -49,6 +156,16 @@ def start_build(clusterName, cluster_arn, node_type):
                     'name': 'CLUSTER_ARN',
                     'value': f'{cluster_arn}',
                     'type': 'PLAINTEXT'
+                },
+                {
+                    'name': 'ACCOUNT_ID',
+                    'value': f'{account_id}',
+                    'type': 'PLAINTEXT'
+                },
+                {
+                    'name': 'REGION',
+                    'value': f'{region_name}',
+                    'type': 'PLAINTEXT'
                 }
             ]
         )
@@ -57,48 +174,7 @@ def start_build(clusterName, cluster_arn, node_type):
     except botocore.exceptions.ClientError as error:
         logger.error(error)
 
-def check_fargate(region, clusterName):
-    session = boto3.session.Session()
-    client = session.client(
-        service_name='eks',
-        region_name=region
-    )
-    try:
-        response = client.list_fargate_profiles(
-            clusterName=clusterName,
-            maxResults=10
-        )
-        if response['fargateProfileNames'] not in []:
-            logger.info('No fargate profiles found, setting node_type to nodegroup...')
-            node_type = 'nodegroup'
-            return node_type
-        else:
-            node_type = 'fargate'
-            return node_type
-    except botocore.exceptions.ClientError as error:
-        logger.error(error)
-        node_type = 'none'
-        return node_type
-    
-def get_active_regions():
-    session = boto3.session.Session()
-    client = session.client(
-        service_name='ec2',
-        region_name=REGION
-    )
-    try:
-        active_regions = []
-        describe_regions_response = client.describe_regions(AllRegions=False)
-        regions = describe_regions_response['Regions']
-        for region in regions:
-            active_regions += [region['RegionName']]
-        return active_regions
-    except botocore.exceptions.ClientError as error:
-        logger.error(error)
-        active_regions = []
-        return active_regions
-    
-def cfnresponse_send(event, context, responseStatus, responseData, physicalResourceId=None, noEcho=False):
+def cfnresponse_send(event, responseStatus, responseData, physicalResourceId=None, noEcho=False):
     responseUrl = event['ResponseURL']
     print(responseUrl)
     responseBody = {}
@@ -123,37 +199,32 @@ def cfnresponse_send(event, context, responseStatus, responseData, physicalResou
     except Exception as e:
         print("send(..) failed executing requests.put(..): " + str(e))
 
-def lambda_handler(event,context):
+def lambda_handler(event, context):
     logger.info('Got event {}'.format(event))
     logger.info('Context {}'.format(context))
     logger.info('Gathering Event Details...')
     response_d = {}
-
-    logger.info('Checking EKS Cluster for API Access Config..')
     try:
-        active_regions = get_active_regions()
-        for region in active_regions:
-            session = boto3.session.Session()
-            client = session.client(
-                service_name='eks',
-                region_name=region
-            )
-            clusters = []
-            cluster_list = client.list_clusters()
-            clusters = cluster_list.get('clusters')
-            for clusterName in clusters:
-                cluster_details = client.describe_cluster(
-                    name=clusterName
-                )
-                cluster_arn = cluster_details.get('cluster', {}).get('arn')
-                node_type = check_fargate(region, clusterName)
-                if node_type not in 'none':
-                    if 'API' in cluster_details.get('cluster', {}).get('accessConfig', {}).get('authenticationMode'):
-                        start_build(clusterName, cluster_arn, node_type)
-                    else:
-                        logger.info(f'API Access not enabled on cluster {clusterName}')
-        cfnresponse_send(event, context, SUCCESS, response_d, "CustomResourcePhysicalID")
+        active_regions = regions()
+        active_accounts = accounts()
+        for account in active_accounts:
+            account_id = account['Id']
+            for region in active_regions:
+                region_name = region["RegionName"]
+                session = new_session(account_id, region_name)
+                if session:
+                    for cluster_name in clusters(session, region_name):
+
+                        cluster_arn, auth_mode, public_endpoint = describe_cluster(session, region_name, cluster_name)
+                        if public_endpoint and 'API' in auth_mode:
+                            node_type = check_fargate(session, region_name, cluster_name)
+                            if node_type:
+                                start_build(cluster_name, cluster_arn, node_type, account_id, region_name)
+                        else:
+                            logger.info(f'Access denied for cluster {cluster_name}. Please verify that API Access and Public Endpoint are enabled')
+        response_d['status'] = "success"
+        cfnresponse_send(event, SUCCESS, response_d, "CustomResourcePhysicalID")
     except botocore.exceptions.ClientError as error:
         logger.error(error)
         response_d['error'] = error
-        cfnresponse_send(event, context, SUCCESS, response_d, "CustomResourcePhysicalID")
+        cfnresponse_send(event, SUCCESS, response_d, "CustomResourcePhysicalID")

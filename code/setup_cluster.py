@@ -8,10 +8,13 @@ PRINCIPAL_ARN = os.environ['PRINCIPAL_ARN']
 USERNAME = os.environ['USERNAME']
 CLUSTER = os.environ['CLUSTER']
 NODETYPE = os.environ['NODE_TYPE']
+ACCOUNT_ID = os.environ['ACCOUNT_ID']
+REGION = os.environ['REGION']
+SWITCH_ROLE = os.environ['SWITCH_ROLE']
+NAT_IP = os.environ['NAT_IP']
 ACCESS_POLICY = 'arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy'
 
-def check_cluster():
-    session = boto3.session.Session()
+def check_cluster(session):
     client = session.client(
         service_name='eks',
         region_name=AWS_REGION
@@ -29,8 +32,7 @@ def check_cluster():
         print(f'Cluster {CLUSTER} is now active')
         return
     
-def setup_cluster():
-    session = boto3.session.Session()
+def setup_cluster(session):
     client = session.client(
         service_name='eks',
         region_name=AWS_REGION
@@ -60,10 +62,55 @@ def setup_cluster():
                 'type': 'cluster'
             }
         )
-        print(f'Cluster: {CLUSTER} is now setup')
     except botocore.exceptions.ClientError as error:
         print(error)
+    try:
+        print(f'Adding NAT IP for {CLUSTER}')
+        response = client.update_cluster_config(
+            name=CLUSTER,
+            resourcesVpcConfig={
+                'publicAccessCidrs': [
+                    f'{NAT_IP}/32',
+                ]
+            }
+        )
+        update_id = response['update']['id']
+        update_response = client.describe_update(
+            name=CLUSTER,
+            updateId=update_id
+        )
+        while update_response['update']['status'] in 'InProgress':
+            print('waiting for update to complete...')
+            time.sleep(30)
+            update_response = client.describe_update(
+                name=CLUSTER,
+                updateId=update_id
+            )
+    except botocore.exceptions.ClientError as error:
+        print(error)
+    print(f'Cluster: {CLUSTER} is now setup')
     return
 
-check_cluster()
-setup_cluster()
+def new_session():
+    try:
+        sts_connection = boto3.client('sts')
+        credentials = sts_connection.assume_role(
+            RoleArn=f'arn:aws:iam::{ACCOUNT_ID}:role/{SWITCH_ROLE}',
+            RoleSessionName=f'crowdstrike-eks-{ACCOUNT_ID}'
+        )
+        return boto3.session.Session(
+            aws_access_key_id=credentials['Credentials']['AccessKeyId'],
+            aws_secret_access_key=credentials['Credentials']['SecretAccessKey'],
+            aws_session_token=credentials['Credentials']['SessionToken'],
+            region_name=REGION
+        )
+    except sts_connection.exceptions.ClientError as exc:
+        # Print the error and continue.
+        # Handle what to do with accounts that cannot be accessed
+        # due to assuming role errors.
+        print("Cannot access adjacent account: ", ACCOUNT_ID, exc)
+        return None
+
+session = new_session()
+check_cluster(session)
+setup_cluster(session)
