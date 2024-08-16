@@ -226,8 +226,6 @@ Resources:
       - StackSetExecutionRole
     Type: AWS::CloudFormation::Stack
     Properties:
-      Capabilities: 
-        - CAPABILITY_NAMED_IAM
       Parameters: 
         CodeBuildProjectName: !Ref CodeBuildProjectName
         CodeBuildRoleName: !Ref CodeBuildRoleName
