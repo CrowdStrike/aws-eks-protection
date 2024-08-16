@@ -219,7 +219,7 @@ Resources:
           Effect: Allow
           Sid: ''
       ManagedPolicyArns:
-        - arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess
 
   RootRolesStack:
     DependsOn:
