@@ -18,29 +18,29 @@ Parameters:
     Default: "crowdstrike-eks-codebuild-role"
 
 Resources:
-  EventBridgeRole:
-    Type: 'AWS::IAM::Role'
-    Properties:
-      RoleName: !Ref EventBridgeRoleName
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - events.amazonaws.com
-            Action:
-              - 'sts:AssumeRole'
-      Policies:
-        - PolicyName: crowdstrike-eks-eventbridge-policy
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - events:PutEvents
-                Resource:
-                  - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${EventBusAccount}:event-bus/${EventBusName}
+  # EventBridgeRole:
+  #   Type: 'AWS::IAM::Role'
+  #   Properties:
+  #     RoleName: !Ref EventBridgeRoleName
+  #     AssumeRolePolicyDocument:
+  #       Version: "2012-10-17"
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service:
+  #               - events.amazonaws.com
+  #           Action:
+  #             - 'sts:AssumeRole'
+  #     Policies:
+  #       - PolicyName: crowdstrike-eks-eventbridge-policy
+  #         PolicyDocument:
+  #           Version: "2012-10-17"
+  #           Statement:
+  #             - Effect: Allow
+  #               Action:
+  #                 - events:PutEvents
+  #               Resource:
+  #                 - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${EventBusAccount}:event-bus/${EventBusName}
   
   EKSExecutionRole:
     Type: 'AWS::IAM::Role'

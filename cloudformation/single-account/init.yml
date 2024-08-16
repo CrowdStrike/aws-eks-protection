@@ -233,26 +233,22 @@ Resources:
         EKSExecutionRoleName: !Ref EKSExecutionRoleName
         EKSS3Bucket: !Ref EKSS3Bucket
         EventBusName: !Ref EventBusName
-      StackName: crowdstrike-eks-protection-root-roles
       TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-root-roles.yml
 
-  EKSTargetRolesStack:
-    DependsOn: RootRolesStack
-    Type: AWS::CloudFormation::Stack
-    Properties:
-      Capabilities:
-        - CAPABILITY_NAMED_IAM
-      Parameters:
-        EKSExecutionRoleName: !Ref EKSExecutionRoleName
-        EventBridgeRoleName: !Ref EventBridgeRoleName
-        EventBusAccount: !Ref EventBusAccount
-        EventBusName: !Ref EventBusName
-        CodeBuildRoleName: !Ref CodeBuildRoleName
-      StackName: crowdstrike-eks-protection-target-roles
-      TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-target-roles-stackset.yml
+  # EKSTargetRolesStack:
+  #   DependsOn: RootRolesStack
+  #   Type: AWS::CloudFormation::Stack
+  #   Properties:
+  #     Parameters:
+  #       EKSExecutionRoleName: !Ref EKSExecutionRoleName
+  #       EventBridgeRoleName: !Ref EventBridgeRoleName
+  #       EventBusAccount: !Ref EventBusAccount
+  #       EventBusName: !Ref EventBusName
+  #       CodeBuildRoleName: !Ref CodeBuildRoleName
+  #     TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-target-roles-stackset.yml
 
   EKSEventBridgeStackSet:
-    DependsOn: EKSTargetRolesStack
+    DependsOn: RootRolesStack
     Type: AWS::CloudFormation::StackSet
     Properties:
       StackSetName: crowdstrike-eks-protection-eventbridge
@@ -261,10 +257,12 @@ Resources:
       Parameters:
         - ParameterKey: EventBusName
           ParameterValue: !Ref EventBusName
-        - ParameterKey: EventBusRegion
-          ParameterValue: !Ref AWS::Region
+        # - ParameterKey: EventBusRegion
+        #   ParameterValue: !Ref AWS::Region
         - ParameterKey: EventBridgeRoleName
           ParameterValue: !Ref EventBridgeRoleName
+        - ParameterKey: EventBusAccount
+          ParameterValue: !Ref AWS::AccountId
       PermissionModel: SELF_MANAGED
       OperationPreferences:
         MaxConcurrentPercentage: 100
@@ -279,7 +277,7 @@ Resources:
       TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-eventbridge-stackset.yml
 
   RootEKSProtectionStack:
-    DependsOn: EKSTargetRolesStack
+    DependsOn: RootRolesStack
     Type: AWS::CloudFormation::Stack
     Properties:
       Parameters: 
@@ -305,5 +303,4 @@ Resources:
         PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
         PrivateSubnet1CIDR: !Ref PrivateSubnet1CIDR
         PrivateSubnet2CIDR: !Ref PrivateSubnet2CIDR
-      StackName: crowdstrike-eks-protection
       TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-protection-stack.yml
