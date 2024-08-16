@@ -233,7 +233,7 @@ Resources:
         EKSExecutionRoleName: !Ref EKSExecutionRoleName
         EKSS3Bucket: !Ref EKSS3Bucket
         EventBusName: !Ref EventBusName
-      StackSetName: crowdstrike-eks-protection-root-roles
+      StackName: crowdstrike-eks-protection-root-roles
       TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-root-roles.yml
 
   EKSTargetRolesStack:
@@ -248,7 +248,7 @@ Resources:
         EventBusAccount: !Ref EventBusAccount
         EventBusName: !Ref EventBusName
         CodeBuildRoleName: !Ref CodeBuildRoleName
-      StackSetName: crowdstrike-eks-protection-target-roles
+      StackName: crowdstrike-eks-protection-target-roles
       TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-target-roles-stackset.yml
 
   EKSEventBridgeStackSet:
@@ -305,5 +305,5 @@ Resources:
         PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
         PrivateSubnet1CIDR: !Ref PrivateSubnet1CIDR
         PrivateSubnet2CIDR: !Ref PrivateSubnet2CIDR
-      StackSetName: crowdstrike-eks-protection
+      StackName: crowdstrike-eks-protection
       TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-protection-stack.yml
