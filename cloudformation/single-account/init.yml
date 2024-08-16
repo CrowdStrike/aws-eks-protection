@@ -120,6 +120,14 @@ Parameters:
     Type: String
     Description: Name of the StackSet Administration Role
     Default: crowdstrike-stackset-administration-role
+  PermissionsBoundary:
+    Type: String
+    Description: Name of optional permission boundary to apply to StackSetExecutionRole.
+    Default: ""
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+    Default: crowdstrike-eks
 
 
   Registry:
@@ -165,6 +173,11 @@ Parameters:
     Type: String
     Default: 10.192.21.0/24
 
+Conditions:
+  SetPermissionsBoundary:
+    "Fn::Not":
+      - !Equals [ !Ref PermissionsBoundary, '' ]
+
 Resources:
   StackSetAdministrationRole:
     Type: AWS::IAM::Role
@@ -184,7 +197,7 @@ Resources:
             Version: '2012-10-17'
             Statement:
               - Action: sts:AssumeRole
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${StackSetExecRole}
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${StackSetExecRoleName}
                 Effect: Allow
 
   StackSetExecutionRole:
@@ -202,7 +215,7 @@ Resources:
         Statement:
           Action: sts:AssumeRole
           Principal:
-            AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${StackSetAdminRole}
+            AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${StackSetAdminRoleName}
           Effect: Allow
           Sid: ''
       ManagedPolicyArns:
@@ -245,7 +258,7 @@ Resources:
     Type: AWS::CloudFormation::StackSet
     Properties:
       StackSetName: crowdstrike-eks-protection-eventbridge
-      ExecutionRoleName: !Ref StackSetExecutionRoleName
+      ExecutionRoleName: !Ref StackSetExecRoleName
       AdministrationRoleARN: !GetAtt StackSetAdministrationRole.Arn
       Parameters:
         - ParameterKey: EventBusName
