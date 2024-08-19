@@ -55,6 +55,12 @@ Resources:
                 - lambda.amazonaws.com
             Action:
               - 'sts:AssumeRole'
+          - Effect: Allow
+            Principal:
+              AWS:
+                - ${AWS::AccountId}
+            Action:
+              - 'sts:AssumeRole'
       ManagedPolicyArns:
         - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
       Policies:
@@ -80,7 +86,29 @@ Resources:
                   - sts:AssumeRole
                 Resource:
                   - !Sub arn:${AWS::Partition}:iam::*:role/${EKSExecutionRoleName}
-
+               - Effect: Allow
+                Action: 
+                  - eks:DescribeCluster
+                  - eks:ListClusters
+                  - eks:ListFargateProfiles
+                  - ec2:DescribeRegions
+                  - eks:UpdateClusterConfig
+                  - eks:DescribeUpdate
+                  - eks:AssociateAccessPolicy
+                Resource: '*'
+              - Effect: Allow
+                Action: 
+                  - ec2:DescribeRegions
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - eks:UpdateAccessEntry
+                  - eks:CreateAccessEntry
+                  - eks:DeleteAccessEntry
+                  - eks:DescribeAccessEntry
+                Resource: 
+                  - !Sub 'arn:${AWS::Partition}:eks:*:${AWS::AccountId}:cluster/*'
+                  - !Sub 'arn:${AWS::Partition}:eks:*:${AWS::AccountId}:access-entry/*/${CodeBuildRoleName}/${EventBusAccount}/$/*'
   EKSCodeBuildRole:
     Type: 'AWS::IAM::Role'
     Properties:
