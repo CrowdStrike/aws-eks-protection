@@ -98,7 +98,7 @@ Resources:
     Type: AWS::Events::EventBus
     Properties: 
         Name: !Ref EventBusName
-        Policy: |
+        Policy: !Sub |
           {
             "Version": "2012-10-17",
             "Statement": [{
