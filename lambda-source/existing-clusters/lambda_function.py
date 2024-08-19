@@ -175,7 +175,6 @@ def lambda_handler(event, context):
                     session = new_session(account_id, region_name)
                     if session:
                         for cluster_name in clusters(session, region_name):
-
                             cluster_arn, auth_mode, public_endpoint = describe_cluster(
                                 session, region_name, cluster_name
                             )

@@ -64,6 +64,10 @@ def lambda_handler(event, context):
     logger.info("Got event {}".format(event))
     logger.info("Context {}".format(context))
 
+    if event["detail"].get("errorCode"):
+        logger.warning("CreateCluster event has an error... exiting.")
+        return
+
     logger.info("Gathering Event Details...")
     region_name = event["region"]
     account_id = event["detail"]["userIdentity"]["accountId"]
