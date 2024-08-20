@@ -107,11 +107,6 @@ Resources:
               "Principal": "*",
               "Action": "events:PutEvents",
               "Resource": "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}",
-              "Condition": {
-                "StringEquals": {
-                  "aws:PrincipalOrgID": "${OrganizationId}"
-                }
-              }
             }]
           }
   EKSRule: 
