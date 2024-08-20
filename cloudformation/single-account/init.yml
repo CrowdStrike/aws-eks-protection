@@ -145,6 +145,11 @@ Resources:
   StackSetAdministrationRole:
     Type: AWS::IAM::Role
     Properties:
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
       RoleName: !Ref StackSetAdminRoleName
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
