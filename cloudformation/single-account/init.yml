@@ -247,13 +247,13 @@ Resources:
         Backend: !Ref Backend
         Registry: !Ref Registry
         EnableKAC: !Ref EnableKAC
-        CrowdStrikeCloud: !Sub '{{resolve:ssm-secure:/CrowdStrike/Falcon/Cloud}}'
+        CrowdStrikeCloud: !Sub '{{resolve:secretsmanager:/CrowdStrike/Falcon/Credentials:SecretString:falcon_cloud}}'
         EventBusName: !Ref EventBusName
-        FalconClientId: !Sub '{{resolve:ssm-secure:/CrowdStrike/Falcon/ClientId}}'
-        FalconClientSecret: !Sub '{{resolve:ssm-secure:/CrowdStrike/Falcon/ClientSecret}}'
+        FalconClientId: !Sub '{{resolve:secretsmanager:/CrowdStrike/Falcon/Credentials:SecretString:falcon_client_id}}'
+        FalconClientSecret: !Sub '{{resolve:secretsmanager:/CrowdStrike/Falcon/Credentials:SecretString:falcon_client_secret}}'
         KubernetesUserName: !Ref KubernetesUserName
-        FalconCID: !Sub '{{resolve:ssm-secure:/CrowdStrike/Falcon/CID}}'
-        DockerAPIToken: !Sub '{{resolve:ssm-secure:/CrowdStrike/Falcon/DockerAPIToken}}'
+        FalconCID: !Sub '{{resolve:secretsmanager:/CrowdStrike/Falcon/Credentials:SecretString:falcon_cid}}'
+        DockerAPIToken: !Sub '{{resolve:secretsmanager:/CrowdStrike/Falcon/Credentials:SecretString:falcon_docker_api_token}}'
         EKSExecutionRoleName: !Ref EKSExecutionRoleName
         CodeBuildProjectName: !Ref CodeBuildProjectName
         CodeBuildRoleName: !Ref CodeBuildRoleName
