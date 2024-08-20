@@ -42,14 +42,12 @@ Parameters:
   EKSS3Bucket:
     Type: String
 
-  OrganizationId:
-    Type: String
-    Description: Your AWS Organization ID (eg. o-********)
   Regions:
     Type: CommaDelimitedList
     Description: Regions to deploy EventBridge Rules
   EventBusAccount:
     Description: The account to centralize compute resources.  This account must be the Organization Management Account or a Delegated Administrator.  If you are currently launching in the account
+    Default: ${AWS::AccountId}
     Type: String
 
   EventBusName:
@@ -251,7 +249,6 @@ Resources:
         EnableKAC: !Ref EnableKAC
         CrowdStrikeCloud: !Sub '{{resolve:ssm:/CrowdStrike/Falcon/Cloud}}'
         EventBusName: !Ref EventBusName
-        OrganizationId: !Ref OrganizationId
         FalconClientId: !Sub '{{resolve:ssm:/CrowdStrike/Falcon/ClientId}}'
         FalconClientSecret: !Sub '{{resolve:ssm:/CrowdStrike/Falcon/ClientSecret}}'
         KubernetesUserName: !Ref KubernetesUserName

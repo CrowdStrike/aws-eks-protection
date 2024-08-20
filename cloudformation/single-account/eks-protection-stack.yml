@@ -36,8 +36,6 @@ Parameters:
   EventBusName:
     Type: String
     Default: "crowdstrike-eks-eventbus"
-  OrganizationId:
-    Type: String
   FalconClientId:
     Type: String
     NoEcho: true
