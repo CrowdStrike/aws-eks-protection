@@ -9,14 +9,6 @@ Metadata:
         Parameters:
           - EKSS3Bucket
       - Label:
-          default: CrowdStrike Falcon Credentials
-        Parameters:
-          - FalconClientId
-          - FalconClientSecret
-          - FalconCID
-          - CrowdStrikeCloud
-          - DockerAPIToken
-      - Label:
           default: Stackset Configuration
         Parameters:
           - Regions
@@ -50,30 +42,6 @@ Metadata:
 Parameters:
   EKSS3Bucket:
     Type: String
-
-  FalconClientId:
-    Type: String
-    NoEcho: true
-    Description: Your Falcon API Client Id
-  FalconClientSecret:
-    Type: String
-    NoEcho: true
-    Description: Your Falcon API Client Secret
-  FalconCID:
-    Type: String
-    Description: Your Falcon CID with checksum (eg. ********************************-**)
-  CrowdStrikeCloud:
-    Type: String
-    Description: Cloud for your Falcon CID (eg. us-1, us-2 or eu-1)
-    AllowedValues:
-      - us-1
-      - us-2
-      - eu-1
-    Default: us-1
-  DockerAPIToken:
-    Type: String
-    NoEcho: true
-    Description: Your Falcon Docker API Token
 
   OrganizationId:
     Type: String
@@ -285,14 +253,14 @@ Resources:
         Backend: !Ref Backend
         Registry: !Ref Registry
         EnableKAC: !Ref EnableKAC
-        CrowdStrikeCloud: !Ref CrowdStrikeCloud
+        CrowdStrikeCloud: !Sub '{{resolve:ssm:/CrowdStrike/Falcon/Cloud}}'
         EventBusName: !Ref EventBusName
         OrganizationId: !Ref OrganizationId
-        FalconClientId: !Ref FalconClientId
-        FalconClientSecret: !Ref FalconClientSecret
+        FalconClientId: !Sub '{{resolve:ssm:/CrowdStrike/Falcon/ClientId}}'
+        FalconClientSecret: !Sub '{{resolve:ssm:/CrowdStrike/Falcon/ClientSecret}}'
         KubernetesUserName: !Ref KubernetesUserName
-        FalconCID: !Ref FalconCID
-        DockerAPIToken: !Ref DockerAPIToken
+        FalconCID: !Sub '{{resolve:ssm:/CrowdStrike/Falcon/CID}}'
+        DockerAPIToken: !Sub '{{resolve:ssm:/CrowdStrike/Falcon/DockerAPIToken}}'
         EKSExecutionRoleName: !Ref EKSExecutionRoleName
         CodeBuildProjectName: !Ref CodeBuildProjectName
         CodeBuildRoleName: !Ref CodeBuildRoleName
