@@ -20,11 +20,25 @@ Parameters:
   EventBusName:
     Type: String
     Default: "crowdstrike-eks-eventbus"
+  PermissionsBoundary:
+    Type: String
+    Description: Name of optional permission boundary to apply to StackSetExecutionRole.
+    Default: ""
+
+Conditions:
+  SetPermissionsBoundary:
+    "Fn::Not":
+      - !Equals [ !Ref PermissionsBoundary, '' ]
 
 Resources:
   EKSEventBridgeRole:
     Type: AWS::IAM::Role
     Properties:
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
       RoleName: !Ref EventBridgeRoleName
       AssumeRolePolicyDocument:
         Version: 2012-10-17
@@ -45,6 +59,11 @@ Resources:
   EKSExecutionRole:
     Type: 'AWS::IAM::Role'
     Properties:
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
       RoleName: !Ref EKSExecutionRoleName
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -112,6 +131,11 @@ Resources:
   EKSCodeBuildRole:
     Type: 'AWS::IAM::Role'
     Properties:
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
       RoleName: !Ref CodeBuildRoleName
       AssumeRolePolicyDocument:
         Version: "2012-10-17"

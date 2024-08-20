@@ -12,6 +12,7 @@ Metadata:
           default: Stackset Configuration
         Parameters:
           - Regions
+          - PermissionsBoundary
       - Label:
           default: Resource Names
         Parameters:
@@ -195,6 +196,7 @@ Resources:
         EKSExecutionRoleName: !Ref EKSExecutionRoleName
         EKSS3Bucket: !Ref EKSS3Bucket
         EventBusName: !Ref EventBusName
+        PermissionsBoundary: !Ref PermissionsBoundary
       TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-root-roles.yml
 
   # EKSTargetRolesStack:
