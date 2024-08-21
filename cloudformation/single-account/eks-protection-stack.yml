@@ -104,7 +104,7 @@ Resources:
               "Effect": "Allow",
               "Principal": "*",
               "Action": "events:PutEvents",
-              "Resource": "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}",
+              "Resource": "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}"
             }]
           }
   EKSRule: 
