@@ -217,7 +217,9 @@ Resources:
   #     TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-target-roles-stackset.yml
 
   EKSEventBridgeStackSet:
-    DependsOn: RootRolesStack
+    DependsOn: 
+      - RootRolesStack
+      - StackSetExecutionRole
     Type: AWS::CloudFormation::StackSet
     Properties:
       StackSetName: crowdstrike-eks-protection-eventbridge
