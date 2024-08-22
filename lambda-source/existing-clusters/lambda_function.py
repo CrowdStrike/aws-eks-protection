@@ -44,7 +44,7 @@ def accounts():
 def new_session(account_id, region):
     if DEPLOY_MODE == "single-account":
         return boto3.Session()
-    elif DEPLOY_MODE == "organizations":
+    elif DEPLOY_MODE == "organization":
         try:
             sts_connection = boto3.client("sts")
             credentials = sts_connection.assume_role(
