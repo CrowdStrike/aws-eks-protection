@@ -42,23 +42,27 @@ def accounts():
 
 
 def new_session(account_id, region):
-    try:
-        sts_connection = boto3.client("sts")
-        credentials = sts_connection.assume_role(
-            RoleArn=f"arn:aws:iam::{account_id}:role/{SWITCH_ROLE}", RoleSessionName=f"crowdstrike-eks-{account_id}"
-        )
-        return boto3.session.Session(
-            aws_access_key_id=credentials["Credentials"]["AccessKeyId"],
-            aws_secret_access_key=credentials["Credentials"]["SecretAccessKey"],
-            aws_session_token=credentials["Credentials"]["SessionToken"],
-            region_name=region,
-        )
-    except sts_connection.exceptions.ClientError as exc:
-        # Print the error and continue.
-        # Handle what to do with accounts that cannot be accessed
-        # due to assuming role errors.
-        print("Cannot access adjacent account: ", account_id, exc)
-        return None
+    if DEPLOY_MODE == "single_account":
+        return boto3.Session()
+    elif DEPLOY_MODE == "organizations":
+        try:
+            sts_connection = boto3.client("sts")
+            credentials = sts_connection.assume_role(
+                RoleArn=f"arn:aws:iam::{account_id}:role/{SWITCH_ROLE}",
+                RoleSessionName=f"crowdstrike-eks-{account_id}",
+            )
+            return boto3.session.Session(
+                aws_access_key_id=credentials["Credentials"]["AccessKeyId"],
+                aws_secret_access_key=credentials["Credentials"]["SecretAccessKey"],
+                aws_session_token=credentials["Credentials"]["SessionToken"],
+                region_name=region,
+            )
+        except sts_connection.exceptions.ClientError as exc:
+            # Print the error and continue.
+            # Handle what to do with accounts that cannot be accessed
+            # due to assuming role errors.
+            print("Cannot access adjacent account: ", account_id, exc)
+            return None
 
 
 def regions():
