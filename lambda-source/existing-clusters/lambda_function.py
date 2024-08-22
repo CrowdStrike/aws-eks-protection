@@ -18,6 +18,7 @@ PROJECT = os.environ["project_name"]
 BUCKET = os.environ["artifact_bucket"]
 REGION = os.environ["AWS_DEFAULT_REGION"]
 SWITCH_ROLE = os.environ["lambda_switch_role"]
+DEPLOY_MODE = os.environ.get("deploy_mode", "organization")
 
 
 def accounts():
@@ -159,33 +160,47 @@ def cfnresponse_send(event, responseStatus, responseData, physicalResourceId=Non
         print("send(..) failed executing requests.put(..): " + str(e))
 
 
+def deploy_eks_protection(account_id, active_regions):
+    for region in active_regions:
+        region_name = region["RegionName"]
+        session = new_session(account_id, region_name)
+        if session:
+            for cluster_name in clusters(session, region_name):
+
+                cluster_arn, auth_mode, public_endpoint = describe_cluster(session, region_name, cluster_name)
+                if public_endpoint and "API" in auth_mode:
+                    node_type = check_fargate(session, region_name, cluster_name)
+                    if node_type:
+                        start_build(cluster_name, cluster_arn, node_type, account_id, region_name)
+                else:
+                    logger.info(
+                        f"Access denied for cluster {cluster_name}. Please verify that API Access and Public Endpoint are enabled"
+                    )
+
+
 def lambda_handler(event, context):
     logger.info("Got event {}".format(event))
     logger.info("Context {}".format(context))
     logger.info("Gathering Event Details...")
+    logger.info("Deploy mode is '{}'".format(DEPLOY_MODE))
     response_d = {}
     if event["RequestType"] in ["Create"]:
         try:
             active_regions = regions()
-            active_accounts = accounts()
-            for account in active_accounts:
-                account_id = account["Id"]
-                for region in active_regions:
-                    region_name = region["RegionName"]
-                    session = new_session(account_id, region_name)
-                    if session:
-                        for cluster_name in clusters(session, region_name):
-                            cluster_arn, auth_mode, public_endpoint = describe_cluster(
-                                session, region_name, cluster_name
-                            )
-                            if public_endpoint and "API" in auth_mode:
-                                node_type = check_fargate(session, region_name, cluster_name)
-                                if node_type:
-                                    start_build(cluster_name, cluster_arn, node_type, account_id, region_name)
-                            else:
-                                logger.info(
-                                    f"Access denied for cluster {cluster_name}. Please verify that API Access and Public Endpoint are enabled"
-                                )
+            if DEPLOY_MODE == "single-account":
+                account_id = boto3.client("sts").get_caller_identity().get("Account")
+                logger.info("Deploying to account: '{}'".format(account_id))
+                deploy_eks_protection(account_id, active_regions)
+            elif DEPLOY_MODE == "organization":
+                active_accounts = accounts()
+                for account in active_accounts:
+                    account_id = account["Id"]
+                    logger.info("Deploying to account: '{}'".format(account_id))
+                    deploy_eks_protection(account_id, active_regions)
+            else:
+                logger.warning(
+                    "Deploy mode: '{}' is not one of 'single-account' or 'organization'".format(DEPLOY_MODE)
+                )
             response_d["status"] = "success"
             cfnresponse_send(event, SUCCESS, response_d, "CustomResourcePhysicalID")
         except botocore.exceptions.ClientError as error:

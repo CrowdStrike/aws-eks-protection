@@ -30,6 +30,7 @@ Metadata:
           - Registry
           - Backend
           - EnableKAC
+          - DeployMode
       - Label:
           default: CodeBuild VPC Configuration
         Parameters:
@@ -91,6 +92,13 @@ Parameters:
     Description: An environment name that is prefixed to resource names
     Type: String
     Default: crowdstrike-eks
+  DeployMode:
+    Description: Deploy eks protection to an organization or single account
+    Type: String
+    Default: organization
+    AllowedValues:
+      - 'single-account'
+      - 'organization'
 
 
   Registry:
@@ -273,4 +281,5 @@ Resources:
         PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
         PrivateSubnet1CIDR: !Ref PrivateSubnet1CIDR
         PrivateSubnet2CIDR: !Ref PrivateSubnet2CIDR
+        DeployMode: !Ref DeployMode
       TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-protection-stack.yml
