@@ -42,7 +42,7 @@ def accounts():
 
 
 def new_session(account_id, region):
-    if DEPLOY_MODE == "single_account":
+    if DEPLOY_MODE == "single-account":
         return boto3.Session()
     elif DEPLOY_MODE == "organizations":
         try:
