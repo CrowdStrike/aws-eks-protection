@@ -224,36 +224,36 @@ Resources:
   #       CodeBuildRoleName: !Ref CodeBuildRoleName
   #     TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-target-roles-stackset.yml
 
-  EKSEventBridgeStackSet:
-    DependsOn: 
-      - RootRolesStack
-      - StackSetExecutionRole
-    Type: AWS::CloudFormation::StackSet
-    Properties:
-      StackSetName: crowdstrike-eks-protection-eventbridge
-      ExecutionRoleName: !Ref StackSetExecRoleName
-      AdministrationRoleARN: !GetAtt StackSetAdministrationRole.Arn
-      Parameters:
-        - ParameterKey: EventBusName
-          ParameterValue: !Ref EventBusName
-        # - ParameterKey: EventBusRegion
-        #   ParameterValue: !Ref AWS::Region
-        - ParameterKey: EventBridgeRoleName
-          ParameterValue: !Ref EventBridgeRoleName
-        - ParameterKey: EventBusAccount
-          ParameterValue: !Ref AWS::AccountId
-      PermissionModel: SELF_MANAGED
-      OperationPreferences:
-        MaxConcurrentPercentage: 100
-        FailureTolerancePercentage: 50
-        RegionConcurrencyType: PARALLEL
-      StackInstancesGroup:
-        - DeploymentTargets:
-            AccountFilterType: NONE
-            Accounts:
-              - !Ref AWS::AccountId
-          Regions: !Ref Regions
-      TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-eventbridge-stackset.yml
+  # EKSEventBridgeStackSet:
+  #   DependsOn: 
+  #     - RootRolesStack
+  #     - StackSetExecutionRole
+  #   Type: AWS::CloudFormation::StackSet
+  #   Properties:
+  #     StackSetName: crowdstrike-eks-protection-eventbridge
+  #     ExecutionRoleName: !Ref StackSetExecRoleName
+  #     AdministrationRoleARN: !GetAtt StackSetAdministrationRole.Arn
+  #     Parameters:
+  #       - ParameterKey: EventBusName
+  #         ParameterValue: !Ref EventBusName
+  #       # - ParameterKey: EventBusRegion
+  #       #   ParameterValue: !Ref AWS::Region
+  #       - ParameterKey: EventBridgeRoleName
+  #         ParameterValue: !Ref EventBridgeRoleName
+  #       - ParameterKey: EventBusAccount
+  #         ParameterValue: !Ref AWS::AccountId
+  #     PermissionModel: SELF_MANAGED
+  #     OperationPreferences:
+  #       MaxConcurrentPercentage: 100
+  #       FailureTolerancePercentage: 50
+  #       RegionConcurrencyType: PARALLEL
+  #     StackInstancesGroup:
+  #       - DeploymentTargets:
+  #           AccountFilterType: NONE
+  #           Accounts:
+  #             - !Ref AWS::AccountId
+  #         Regions: !Ref Regions
+  #     TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-eventbridge-stackset.yml
 
   RootEKSProtectionStack:
     DependsOn: RootRolesStack
