@@ -272,6 +272,9 @@ Resources:
           - Name: NAT_IP
             Type: PLAINTEXT
             Value: !GetAtt NatGatewayEIP.PublicIp
+          - Name: DEPLOY_MODE
+            Type: PLAINTEXT
+            Value: !Ref DeployMode
         Image: aws/codebuild/standard:7.0
         PrivilegedMode: true
         Type: LINUX_CONTAINER
