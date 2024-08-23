@@ -69,27 +69,27 @@ def setup_cluster(session):
     return
 
 
-def new_session(account_id, region):
+def new_session():
     if DEPLOY_MODE == "single-account":
         return boto3.Session()
     elif DEPLOY_MODE == "organization":
         try:
             sts_connection = boto3.client("sts")
             credentials = sts_connection.assume_role(
-                RoleArn=f"arn:aws:iam::{account_id}:role/{SWITCH_ROLE}",
-                RoleSessionName=f"crowdstrike-eks-{account_id}",
+                RoleArn=f"arn:aws:iam::{ACCOUNT_ID}:role/{SWITCH_ROLE}",
+                RoleSessionName=f"crowdstrike-eks-{ACCOUNT_ID}",
             )
             return boto3.session.Session(
                 aws_access_key_id=credentials["Credentials"]["AccessKeyId"],
                 aws_secret_access_key=credentials["Credentials"]["SecretAccessKey"],
                 aws_session_token=credentials["Credentials"]["SessionToken"],
-                region_name=region,
+                region_name=REGION,
             )
         except sts_connection.exceptions.ClientError as exc:
             # Print the error and continue.
             # Handle what to do with accounts that cannot be accessed
             # due to assuming role errors.
-            print("Cannot access adjacent account: ", account_id, exc)
+            print("Cannot access adjacent account: ", ACCOUNT_ID, exc)
             return None
 
 
