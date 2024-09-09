@@ -1,0 +1,285 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Source S3 Bucket - Must be same Region as this stack
+        Parameters:
+          - EKSS3Bucket
+      - Label:
+          default: Stackset Configuration
+        Parameters:
+          - Regions
+          - PermissionsBoundary
+      - Label:
+          default: Resource Names
+        Parameters:
+          - EventBusName
+          - EventBridgeRoleName
+          - CodeBuildProjectName
+          - CodeBuildRoleName
+          - KubernetesUserName
+          - EKSExecutionRoleName
+          - StackSetExecRoleName
+          - StackSetAdminRoleName
+      - Label:
+          default: Sensor Configuration
+        Parameters:
+          - Registry
+          - Backend
+          - EnableKAC
+          - DeployMode
+      - Label:
+          default: CodeBuild VPC Configuration
+        Parameters:
+          - VpcCIDR
+          - PublicSubnet1CIDR
+          - PublicSubnet2CIDR
+          - PrivateSubnet1CIDR
+          - PrivateSubnet2CIDR
+
+Parameters:
+  EKSS3Bucket:
+    Type: String
+
+  Regions:
+    Type: CommaDelimitedList
+    Description: Regions to deploy EventBridge Rules
+  EventBusAccount:
+    Description: The account to centralize compute resources.  This account must be the Organization Management Account or a Delegated Administrator.  If you are currently launching in the account
+    Default: ${AWS::AccountId}
+    Type: String
+
+  EventBusName:
+    Type: String
+    Description: Name of the centralized EventBus
+    Default: crowdstrike-eks-eventbus
+  EventBridgeRoleName:
+    Type: String
+    Description: Name of the EventBridge IAM role
+    Default: crowdstrike-eks-eventbridge-role
+  EKSExecutionRoleName:
+    Type: String
+    Description: Name of the Target Execution IAM role
+    Default: crowdstrike-eks-execution-role
+  CodeBuildProjectName:
+    Type: String
+    Description: Name of the CodeBuild Project
+    Default: crowdstrike-eks-codebuild
+  CodeBuildRoleName:
+    Type: String
+    Description: Name of the CodeBuild IAM role
+    Default: crowdstrike-eks-codebuild-role
+  KubernetesUserName:
+    Type: String
+    Description: Name of the Kubernetes UserName
+    Default: crowdstrike-eks
+  StackSetExecRoleName:
+    Type: String
+    Description: Name of the StackSet Execution Role
+    Default: crowdstrike-stackset-execution-role
+  StackSetAdminRoleName:
+    Type: String
+    Description: Name of the StackSet Administration Role
+    Default: crowdstrike-stackset-administration-role
+  PermissionsBoundary:
+    Type: String
+    Description: Name of optional permission boundary to apply to StackSetExecutionRole.
+    Default: ""
+  EnvironmentName:
+    Description: An environment name that is prefixed to resource names
+    Type: String
+    Default: crowdstrike-eks
+  DeployMode:
+    Description: Deploy eks protection to an organization or single account
+    Type: String
+    Default: organization
+    AllowedValues:
+      - 'single-account'
+      - 'organization'
+
+
+  Registry:
+    Type: String
+    Description: Source Falcon Image from CrowdStrike or mirror to ECR
+    AllowedValues:
+      - 'crowdstrike'
+      - 'ecr'
+    Default: crowdstrike
+  Backend:
+    Type: String
+    Description: kernel or bpf for Daemonset Sensor
+    AllowedValues:
+      - 'kernel'
+      - 'bpf'
+    Default: kernel
+  EnableKAC:
+    Type: String
+    Description: Deploy Kubernetes Admission Controller (KAC).  For more info see https://falcon.crowdstrike.com/documentation/page/aa4fccee/container-security#s41cbec3
+    AllowedValues:
+      - true
+      - false
+    Default: true
+
+  VpcCIDR:
+    Description: CIDR for the CodeBuild VPC
+    Type: String
+    Default: 10.192.0.0/16
+  PublicSubnet1CIDR:
+    Description: CIDR for the public subnet in the first Availability Zone of the CodeBuild VPC
+    Type: String
+    Default: 10.192.10.0/24
+  PublicSubnet2CIDR:
+    Description: CIDR for the public subnet in the second Availability Zone of the CodeBuild VPC
+    Type: String
+    Default: 10.192.11.0/24
+  PrivateSubnet1CIDR:
+    Description: CIDR for the private subnet in the first Availability Zone of the CodeBuild VPC
+    Type: String
+    Default: 10.192.20.0/24
+  PrivateSubnet2CIDR:
+    Description: CIDR for the private subnet in the second Availability Zone of the CodeBuild VPC
+    Type: String
+    Default: 10.192.21.0/24
+
+Conditions:
+  SetPermissionsBoundary:
+    "Fn::Not":
+      - !Equals [ !Ref PermissionsBoundary, '' ]
+
+Resources:
+  StackSetAdministrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
+      RoleName: !Ref StackSetAdminRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          Action: sts:AssumeRole
+          Principal:
+            Service: cloudformation.amazonaws.com
+          Effect: Allow
+          Sid: ''
+      Policies:
+        - PolicyName: crowdstrike-stackset-execution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action: sts:AssumeRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${StackSetExecRoleName}
+                Effect: Allow
+
+  StackSetExecutionRole:
+    Type: AWS::IAM::Role
+    DependsOn: StackSetAdministrationRole
+    Properties:
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
+      RoleName: !Ref StackSetExecRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          Action: sts:AssumeRole
+          Principal:
+            AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${StackSetAdminRoleName}
+          Effect: Allow
+          Sid: ''
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AdministratorAccess
+
+  RootRolesStack:
+    DependsOn:
+      - StackSetExecutionRole
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters: 
+        CodeBuildProjectName: !Ref CodeBuildProjectName
+        CodeBuildRoleName: !Ref CodeBuildRoleName
+        EventBridgeRoleName: !Ref EventBridgeRoleName
+        EKSExecutionRoleName: !Ref EKSExecutionRoleName
+        EKSS3Bucket: !Ref EKSS3Bucket
+        EventBusName: !Ref EventBusName
+        PermissionsBoundary: !Ref PermissionsBoundary
+      TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-root-roles.yml
+
+  # EKSTargetRolesStack:
+  #   DependsOn: RootRolesStack
+  #   Type: AWS::CloudFormation::Stack
+  #   Properties:
+  #     Parameters:
+  #       EKSExecutionRoleName: !Ref EKSExecutionRoleName
+  #       EventBridgeRoleName: !Ref EventBridgeRoleName
+  #       EventBusAccount: !Ref EventBusAccount
+  #       EventBusName: !Ref EventBusName
+  #       CodeBuildRoleName: !Ref CodeBuildRoleName
+  #     TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-target-roles-stackset.yml
+
+  # EKSEventBridgeStackSet:
+  #   DependsOn: 
+  #     - RootRolesStack
+  #     - StackSetExecutionRole
+  #   Type: AWS::CloudFormation::StackSet
+  #   Properties:
+  #     StackSetName: crowdstrike-eks-protection-eventbridge
+  #     ExecutionRoleName: !Ref StackSetExecRoleName
+  #     AdministrationRoleARN: !GetAtt StackSetAdministrationRole.Arn
+  #     Parameters:
+  #       - ParameterKey: EventBusName
+  #         ParameterValue: !Ref EventBusName
+  #       # - ParameterKey: EventBusRegion
+  #       #   ParameterValue: !Ref AWS::Region
+  #       - ParameterKey: EventBridgeRoleName
+  #         ParameterValue: !Ref EventBridgeRoleName
+  #       - ParameterKey: EventBusAccount
+  #         ParameterValue: !Ref AWS::AccountId
+  #     PermissionModel: SELF_MANAGED
+  #     OperationPreferences:
+  #       MaxConcurrentPercentage: 100
+  #       FailureTolerancePercentage: 50
+  #       RegionConcurrencyType: PARALLEL
+  #     StackInstancesGroup:
+  #       - DeploymentTargets:
+  #           AccountFilterType: NONE
+  #           Accounts:
+  #             - !Ref AWS::AccountId
+  #         Regions: !Ref Regions
+  #     TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-eventbridge-stackset.yml
+
+  RootEKSProtectionStack:
+    DependsOn: RootRolesStack
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      Parameters: 
+        EKSS3Bucket: !Ref EKSS3Bucket
+        Backend: !Ref Backend
+        Registry: !Ref Registry
+        EnableKAC: !Ref EnableKAC
+        CrowdStrikeCloud: !Sub '{{resolve:secretsmanager:/CrowdStrike/Falcon/Credentials:SecretString:falcon_cloud}}'
+        EventBusName: !Ref EventBusName
+        FalconClientId: !Sub '{{resolve:secretsmanager:/CrowdStrike/Falcon/Credentials:SecretString:falcon_client_id}}'
+        FalconClientSecret: !Sub '{{resolve:secretsmanager:/CrowdStrike/Falcon/Credentials:SecretString:falcon_client_secret}}'
+        KubernetesUserName: !Ref KubernetesUserName
+        FalconCID: !Sub '{{resolve:secretsmanager:/CrowdStrike/Falcon/Credentials:SecretString:falcon_cid}}'
+        DockerAPIToken: !Sub '{{resolve:secretsmanager:/CrowdStrike/Falcon/Credentials:SecretString:falcon_docker_api_token}}'
+        EKSExecutionRoleName: !Ref EKSExecutionRoleName
+        CodeBuildProjectName: !Ref CodeBuildProjectName
+        CodeBuildRoleName: !Ref CodeBuildRoleName
+        EventBridgeRoleName: !Ref EventBridgeRoleName
+        EnvironmentName: !Ref EnvironmentName
+        VpcCIDR: !Ref VpcCIDR
+        PublicSubnet1CIDR: !Ref PublicSubnet1CIDR
+        PublicSubnet2CIDR: !Ref PublicSubnet2CIDR
+        PrivateSubnet1CIDR: !Ref PrivateSubnet1CIDR
+        PrivateSubnet2CIDR: !Ref PrivateSubnet2CIDR
+        DeployMode: !Ref DeployMode
+      TemplateURL: !Sub https://${EKSS3Bucket}.s3.${AWS::Region}.amazonaws.com/eks-protection-stack.yml
