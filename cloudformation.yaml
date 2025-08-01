@@ -1,0 +1,430 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CrowdStrike Falcon EKS Protection using alpine/k8s pre-built image'
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for the ECS service
+  
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnet IDs for the ECS service
+  
+  FalconClientId:
+    Type: String
+    Description: CrowdStrike Falcon Client ID
+    NoEcho: true
+  
+  FalconClientSecret:
+    Type: String
+    Description: CrowdStrike Falcon Client Secret  
+    NoEcho: true
+
+  FalconCloud:
+    Type: String
+    Description: CrowdStrike Falcon Cloud
+    AllowedValues: ['us-1', 'us-2', 'eu-1', 'us-gov-1', 'us-gov-2']
+
+  DeployFalconAdmission:
+    Type: String
+    Description: Deploy Falcon Kubernetes Admission Controller
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  DeployFalconImageAnalyzer:
+    Type: String 
+    Description: Deploy Falcon Image Analyzer (requires additional API permissions)
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
+  DeployFalconNodeSensor:
+    Type: String
+    Description: Deploy Falcon Node Sensor (auto-detects based on cluster type)
+    Default: 'auto'
+    AllowedValues: ['auto', 'true', 'false']
+
+  DeployFalconContainer:
+    Type: String
+    Description: Deploy Falcon Container Sensor (auto-detects based on cluster type)  
+    Default: 'auto'
+    AllowedValues: ['auto', 'true', 'false']
+
+Resources:
+  # Store Falcon API credentials in Secrets Manager
+  FalconCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: crowdstrike/falcon-api-credentials
+      Description: CrowdStrike Falcon API credentials
+      SecretString: !Sub |
+        {
+          "client_id": "${FalconClientId}",
+          "client_secret": "${FalconClientSecret}"
+        }
+
+  # GitHub repository configuration for script downloads
+  GitHubScriptParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /crowdstrike/falcon-eks-protection/github-script-url
+      Type: String
+      Description: GitHub URL for check and install script
+      Value: "https://raw.githubusercontent.com/crowdstrike/eks-protection/main/eks-protection-container/check_and_install.sh"
+
+  # Store K8s Manifest for Falcon Deployment
+  FalconDeploymentParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /crowdstrike/falcon-eks-protection/falcon-deployment-manifest
+      Type: String
+      Description: CrowdStrike FalconDeployment YAML manifest
+      Value: !Sub |
+        apiVersion: falcon.crowdstrike.com/v1alpha1
+        kind: FalconDeployment
+        metadata:
+          name: falcon-deployment
+          namespace: default
+        spec:
+          # Use Kubernetes secret for API credentials
+          falconSecret:
+            enabled: true
+            namespace: default
+            secretName: falcon-api-secret
+          
+          # Falcon API configuration
+          falcon_api:
+            cloud_region: ${FalconCloud}
+          
+          # Component deployment flags (will be updated by script based on cluster type)
+          deployNodeSensor: FINAL_DEPLOY_NODE_SENSOR
+          deployContainerSensor: FINAL_DEPLOY_CONTAINER
+          deployAdmissionController: ${DeployFalconAdmission}
+          deployImageAnalyzer: ${DeployFalconImageAnalyzer}
+
+  # Store Event Handler script
+  EventHandlerParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /crowdstrike/falcon-eks-protection/event-handler-script
+      Type: String
+      Description: CrowdStrike Falcon event handler script
+      Value: |
+        #!/bin/bash
+        set -eo pipefail
+
+        # Function to parse EventBridge event for EKS cluster information
+        parse_event() {
+            echo "Processing EKS cluster event..."
+            
+            # Check if we have event data from EventBridge
+            if [[ -n "${!EVENT_DATA}" ]]; then
+                echo "Event data received: ${!EVENT_DATA}"
+                
+                # Extract cluster information from event
+                export EKS_CLUSTER_NAME=$(echo "${!EVENT_DATA}" | jq -r '.detail.responseElements.cluster.name // .detail.requestParameters.name // empty')
+                export AWS_REGION=$(echo "${!EVENT_DATA}" | jq -r '.detail.awsRegion // empty')
+                
+                if [[ -z "${!EKS_CLUSTER_NAME}" || "${!EKS_CLUSTER_NAME}" == "null" ]]; then
+                    echo "ERROR: Could not extract cluster name from event data"
+                    exit 1
+                fi
+                
+                echo "Extracted EKS cluster: ${!EKS_CLUSTER_NAME} in region: ${!AWS_REGION}"
+            fi
+            
+            # Validate required environment variables
+            if [[ -z "${!EKS_CLUSTER_NAME}" ]]; then
+                echo "ERROR: EKS_CLUSTER_NAME environment variable is required"
+                exit 1
+            fi
+            
+            if [[ -z "${!AWS_REGION}" ]]; then
+                echo "ERROR: AWS_REGION environment variable is required"
+                exit 1
+            fi
+            
+            # Set default values for containerized execution
+            export NAMESPACE=${!NAMESPACE:-"default"}
+            export POD_NAME=${!POD_NAME:-"falcon-test-app"}
+            export DEPLOYMENT_NAME=${!DEPLOYMENT_NAME:-"falcon-test-app"}
+            export DEPLOY_FALCON_OPERATOR=${!DEPLOY_FALCON_OPERATOR:-"true"}
+            export DEPLOY_FALCON_RESOURCES=${!DEPLOY_FALCON_RESOURCES:-"true"}
+            
+            echo "Configuration:"
+            echo "  EKS Cluster: ${!EKS_CLUSTER_NAME}"
+            echo "  AWS Region: ${!AWS_REGION}"
+            echo "  Deploy Falcon Operator: ${!DEPLOY_FALCON_OPERATOR}"
+            echo "  Deploy Falcon Resources: ${!DEPLOY_FALCON_RESOURCES}"
+        }
+
+        # Function to wait for cluster to be available
+        wait_for_cluster() {
+            echo "Waiting for EKS cluster to be available..."
+            local max_attempts=30
+            local attempt=1
+            
+            while [[ $$attempt -le $$max_attempts ]]; do
+                if aws eks describe-cluster --name "${!EKS_CLUSTER_NAME}" --region "${!AWS_REGION}" --query 'cluster.status' --output text 2>/dev/null | grep -q "ACTIVE"; then
+                    echo "EKS cluster ${!EKS_CLUSTER_NAME} is active"
+                    return 0
+                fi
+                
+                echo "Waiting for cluster to be active (attempt $$attempt/$$max_attempts)..."
+                sleep 30
+                ((attempt++))
+            done
+            
+            echo "ERROR: EKS cluster did not become active within timeout"
+            return 1
+        }
+
+        # Main execution
+        main() {
+            echo "=== CrowdStrike Falcon EKS Protection - Event-Driven Execution ==="
+            
+            # Parse event data
+            parse_event
+            
+            # Wait for cluster to be available
+            wait_for_cluster
+            
+            # Update kubeconfig
+            echo "Updating kubeconfig for cluster ${!EKS_CLUSTER_NAME}..."
+            aws eks update-kubeconfig --name "${!EKS_CLUSTER_NAME}" --region "${!AWS_REGION}"
+            
+            # Execute the main installation script
+            echo "Executing CrowdStrike Falcon Operator installation..."
+            cd /app
+            exec ./check_and_install.sh
+        }
+
+        # Run main function
+        main "$$@"
+
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: crowdstrike-falcon-eks-protection
+
+  # CloudWatch Log Group
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/crowdstrike-falcon-eks-protection
+      RetentionInDays: 30
+
+  # ECS Task Execution Role
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: crowdstrike-falcon-eks-protection-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref FalconCredentialsSecret
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Ref GitHubScriptParameter
+                  - !Ref EventHandlerParameter
+                  - !Ref FalconDeploymentParameter
+
+  # ECS Task Role (for EKS operations)
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CrowdStrikeFalconEKSProtectionTaskRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EKSFullAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - eks:*
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                  - iam:CreateRole
+                  - iam:AttachRolePolicy
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:ListOpenIDConnectProviders
+                Resource: "*"
+        - PolicyName: KubernetesAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+
+  # Security Group for ECS Tasks
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for CrowdStrike Falcon EKS Protection ECS tasks
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+
+  # ECS Task Definition
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: crowdstrike-falcon-eks-protection
+      NetworkMode: awsvpc
+      RequiresCompatibilities: [FARGATE]
+      Cpu: '1024'
+      Memory: '2048'
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: falcon-eks-protection
+          Image: alpine/k8s:1.28.4
+          Essential: true
+          EntryPoint: ["/bin/sh"]
+          Command:
+            - "-c"
+            - "SCRIPT_URL=$(aws ssm get-parameter --name $GITHUB_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -o /app/check_and_install.sh $SCRIPT_URL && aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text > /app/event-handler.sh && chmod +x /app/*.sh && mkdir -p /root/.kube /app && /app/event-handler.sh"
+          WorkingDirectory: "/app"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: DEPLOY_FALCON_OPERATOR
+              Value: "true"
+            - Name: DEPLOY_FALCON_RESOURCES
+              Value: "true"
+            - Name: FALCON_CLOUD_REGION
+              Value: "autodiscover"
+            - Name: FALCON_OPERATOR_VERSION
+              Value: "latest"
+            - Name: DEPLOY_FALCON_ADMISSION
+              Value: !Ref DeployFalconAdmission
+            - Name: DEPLOY_FALCON_IMAGE_ANALYZER
+              Value: !Ref DeployFalconImageAnalyzer
+            - Name: DEPLOY_FALCON_NODE_SENSOR
+              Value: !Ref DeployFalconNodeSensor
+            - Name: DEPLOY_FALCON_CONTAINER
+              Value: !Ref DeployFalconContainer
+            - Name: GITHUB_SCRIPT_PARAMETER
+              Value: !Ref GitHubScriptParameter
+            - Name: EVENT_HANDLER_PARAMETER
+              Value: !Ref EventHandlerParameter
+            - Name: FALCON_DEPLOYMENT_PARAMETER
+              Value: !Ref FalconDeploymentParameter
+          Secrets:
+            - Name: FALCON_CLIENT_ID
+              ValueFrom: !Sub "${FalconCredentialsSecret}:client_id::"
+            - Name: FALCON_CLIENT_SECRET
+              ValueFrom: !Sub "${FalconCredentialsSecret}:client_secret::"
+
+  # EventBridge Rule for EKS Cluster Creation
+  EKSEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: crowdstrike-falcon-eks-cluster-created
+      Description: Trigger CrowdStrike Falcon deployment when EKS cluster is created
+      EventPattern:
+        source: ["aws.eks"]
+        detail-type: ["AWS API Call via CloudTrail"]
+        detail:
+          eventSource: ["eks.amazonaws.com"]
+          eventName: ["CreateCluster"]
+          responseElements:
+            cluster:
+              status: ["CREATING"]
+      State: ENABLED
+      Targets:
+        - Id: "FalconEKSProtectionTarget"
+          Arn: !GetAtt ECSCluster.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          EcsParameters:
+            TaskDefinitionArn: !Ref ECSTaskDefinition
+            LaunchType: FARGATE
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                SecurityGroups:
+                  - !Ref ECSSecurityGroup
+                Subnets: !Ref PrivateSubnetIds
+                AssignPublicIp: DISABLED
+            PlatformVersion: LATEST
+
+  # EventBridge Service Role
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeECSPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RunTask
+                Resource: !Ref ECSTaskDefinition
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt ECSTaskExecutionRole.Arn
+                  - !GetAtt ECSTaskRole.Arn
+
+Outputs:
+  ECSClusterArn:
+    Description: ARN of the ECS Cluster
+    Value: !GetAtt ECSCluster.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ECSClusterArn"
+  
+  TaskDefinitionArn:
+    Description: ARN of the ECS Task Definition
+    Value: !Ref ECSTaskDefinition
+    Export:
+      Name: !Sub "${AWS::StackName}-TaskDefinitionArn"
+
+  EventRuleArn:
+    Description: ARN of the EventBridge Rule
+    Value: !GetAtt EKSEventRule.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-EventRuleArn"

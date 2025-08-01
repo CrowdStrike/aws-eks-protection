@@ -1,0 +1,66 @@
+{
+  "family": "crowdstrike-falcon-eks-protection",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/crowdstrike-falcon-eks-protection-execution-role",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/CrowdStrikeFalconEKSProtectionTaskRole",
+  "containerDefinitions": [
+    {
+      "name": "falcon-eks-protection",
+      "image": "alpine/k8s:1.28.4",
+      "essential": true,
+      "entryPoint": ["/bin/sh"],
+      "command": [
+        "-c",
+        "aws ssm get-parameter --name $CHECK_AND_INSTALL_PARAMETER --query Parameter.Value --output text > /app/check_and_install.sh && aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text > /app/event-handler.sh && chmod +x /app/*.sh && mkdir -p /root/.kube /app && /app/event-handler.sh"
+      ],
+      "workingDirectory": "/app",
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/crowdstrike-falcon-eks-protection",
+          "awslogs-region": "REGION",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "environment": [
+        {
+          "name": "DEPLOY_FALCON_OPERATOR",
+          "value": "true"
+        },
+        {
+          "name": "DEPLOY_FALCON_RESOURCES",
+          "value": "true"
+        },
+        {
+          "name": "FALCON_CLOUD_REGION",
+          "value": "autodiscover"
+        },
+        {
+          "name": "FALCON_OPERATOR_VERSION",
+          "value": "latest"
+        },
+        {
+          "name": "CHECK_AND_INSTALL_PARAMETER",
+          "value": "/crowdstrike/falcon-eks-protection/check-and-install-script"
+        },
+        {
+          "name": "EVENT_HANDLER_PARAMETER",
+          "value": "/crowdstrike/falcon-eks-protection/event-handler-script"
+        }
+      ],
+      "secrets": [
+        {
+          "name": "FALCON_CLIENT_ID",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:crowdstrike/falcon-api-credentials:client_id::"
+        },
+        {
+          "name": "FALCON_CLIENT_SECRET",
+          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:crowdstrike/falcon-api-credentials:client_secret::"
+        }
+      ]
+    }
+  ]
+}
