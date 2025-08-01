@@ -1,6 +1,30 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'CrowdStrike Falcon EKS Protection using alpine/k8s pre-built image'
 
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VpcId
+          - PrivateSubnetIds
+          - NatPublicIp
+      - Label:
+          default: Falcon API Credentials
+        Parameters:
+          - FalconClientId
+          - FalconClientSecret
+          - FalconCloud
+      - Label:
+          default: Falcon Operator Options
+        Parameters:
+          - DeployFalconNodeSensor
+          - DeployFalconContainer
+          - DeployFalconAdmission
+          - DeployFalconImageAnalyzer
+
+
 Parameters:
   VpcId:
     Type: AWS::EC2::VPC::Id
@@ -9,6 +33,10 @@ Parameters:
   PrivateSubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Description: Private subnet IDs for the ECS service
+
+  NatPublicIp:
+    Type: String
+    Description: Public IP Address for the NAT Gateway
   
   FalconClientId:
     Type: String
@@ -63,13 +91,21 @@ Resources:
         }
 
   # GitHub repository configuration for script downloads
-  GitHubScriptParameter:
+  DeployScriptParameter:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /crowdstrike/falcon-eks-protection/github-script-url
+      Name: /crowdstrike/falcon-eks-protection/deploy-script-url
       Type: String
       Description: GitHub URL for check and install script
-      Value: "https://raw.githubusercontent.com/crowdstrike/eks-protection/main/eks-protection-container/check_and_install.sh"
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/check_and_install.sh"
+
+  SetupScriptParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /crowdstrike/falcon-eks-protection/setup-script-url
+      Type: String
+      Description: GitHub URL for check and install script
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/setup_cluster.py"
 
   # Store K8s Manifest for Falcon Deployment
   FalconDeploymentParameter:
@@ -108,7 +144,7 @@ Resources:
       Name: /crowdstrike/falcon-eks-protection/event-handler-script
       Type: String
       Description: CrowdStrike Falcon event handler script
-      Value: |
+      Value: !Sub |
         #!/bin/bash
         set -eo pipefail
 
@@ -130,6 +166,17 @@ Resources:
                 fi
                 
                 echo "Extracted EKS cluster: ${!EKS_CLUSTER_NAME} in region: ${!AWS_REGION}"
+            else
+                echo "No EVENT_DATA found, checking environment variables..."
+                
+                # Check for environment variables if no event data
+                if [[ -n "${!EKS_CLUSTER_NAME}" ]]; then
+                    echo "Using EKS_CLUSTER_NAME from environment: ${!EKS_CLUSTER_NAME}"
+                fi
+                
+                if [[ -n "${!AWS_REGION}" ]]; then
+                    echo "Using AWS_REGION from environment: ${!AWS_REGION}"
+                fi
             fi
             
             # Validate required environment variables
@@ -163,15 +210,15 @@ Resources:
             local max_attempts=30
             local attempt=1
             
-            while [[ $$attempt -le $$max_attempts ]]; do
-                if aws eks describe-cluster --name "${!EKS_CLUSTER_NAME}" --region "${!AWS_REGION}" --query 'cluster.status' --output text 2>/dev/null | grep -q "ACTIVE"; then
+            while [[ $attempt -le $max_attempts ]]; do
+                if aws eks describe-cluster --name "${!EKS_CLUSTER_NAME}" --region "${!AWS_REGION}" --query 'cluster.status' --output text 2>/dev/null | grep "ACTIVE"; then
                     echo "EKS cluster ${!EKS_CLUSTER_NAME} is active"
                     return 0
                 fi
                 
-                echo "Waiting for cluster to be active (attempt $$attempt/$$max_attempts)..."
+                echo "Waiting for cluster to be active (attempt $attempt/$max_attempts)..."
                 sleep 30
-                ((attempt++))
+                attempt=$((attempt + 1))
             done
             
             echo "ERROR: EKS cluster did not become active within timeout"
@@ -188,10 +235,14 @@ Resources:
             # Wait for cluster to be available
             wait_for_cluster
             
+            # Setup Cluster Access
+            echo "Updating Access configuration for cluster ${!EKS_CLUSTER_NAME}..."
+            python3 setup_cluster.py
+
             # Update kubeconfig
             echo "Updating kubeconfig for cluster ${!EKS_CLUSTER_NAME}..."
             aws eks update-kubeconfig --name "${!EKS_CLUSTER_NAME}" --region "${!AWS_REGION}"
-            
+
             # Execute the main installation script
             echo "Executing CrowdStrike Falcon Operator installation..."
             cd /app
@@ -238,13 +289,6 @@ Resources:
                   - secretsmanager:GetSecretValue
                 Resource:
                   - !Ref FalconCredentialsSecret
-              - Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                Resource:
-                  - !Ref GitHubScriptParameter
-                  - !Ref EventHandlerParameter
-                  - !Ref FalconDeploymentParameter
 
   # ECS Task Role (for EKS operations)
   ECSTaskRole:
@@ -259,6 +303,27 @@ Resources:
               Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       Policies:
+        - PolicyName: SecretsManagerAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref FalconCredentialsSecret
+        - PolicyName: ParameterAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SetupScriptParameter}'
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DeployScriptParameter}'
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${EventHandlerParameter}'
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${FalconDeploymentParameter}'
         - PolicyName: EKSFullAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -315,7 +380,7 @@ Resources:
           EntryPoint: ["/bin/sh"]
           Command:
             - "-c"
-            - "SCRIPT_URL=$(aws ssm get-parameter --name $GITHUB_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -o /app/check_and_install.sh $SCRIPT_URL && aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text > /app/event-handler.sh && chmod +x /app/*.sh && mkdir -p /root/.kube /app && /app/event-handler.sh"
+            - "SETUP_URL=$(aws ssm get-parameter --name $SETUP_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/setup_cluster.py $SETUP_URL && DEPLOY_URL=$(aws ssm get-parameter --name $DEPLOY_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/check_and_install.sh $DEPLOY_URL && aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text > /app/event-handler.sh && chmod +x /app/*.sh && chmod +x /app/*.py && mkdir -p /root/.kube /app && apk add --no-cache --quiet python3 py3-pip && pip3 install -qqq boto3 botocore && /app/event-handler.sh"                                        
           WorkingDirectory: "/app"
           LogConfiguration:
             LogDriver: awslogs
@@ -340,12 +405,22 @@ Resources:
               Value: !Ref DeployFalconNodeSensor
             - Name: DEPLOY_FALCON_CONTAINER
               Value: !Ref DeployFalconContainer
-            - Name: GITHUB_SCRIPT_PARAMETER
-              Value: !Ref GitHubScriptParameter
+            - Name: DEPLOY_SCRIPT_PARAMETER
+              Value: !Ref DeployScriptParameter
+            - Name: SETUP_SCRIPT_PARAMETER
+              Value: !Ref SetupScriptParameter
             - Name: EVENT_HANDLER_PARAMETER
               Value: !Ref EventHandlerParameter
             - Name: FALCON_DEPLOYMENT_PARAMETER
               Value: !Ref FalconDeploymentParameter
+            - Name: EKS_CLUSTER_NAME
+              Value: 'SourcedFromEvent'
+            - Name: AWS_REGION
+              Value: 'SourcedFromEvent'
+            - Name: NAT_IP
+              Value: !Ref NatPublicIp
+            - Name: TASK_ARN
+              Value: !GetAtt ECSTaskRole.Arn
           Secrets:
             - Name: FALCON_CLIENT_ID
               ValueFrom: !Sub "${FalconCredentialsSecret}:client_id::"
