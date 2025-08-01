@@ -8,19 +8,8 @@ EKS_CLUSTER_NAME = os.environ['EKS_CLUSTER_NAME']
 # ACCOUNT_ID = os.environ['ACCOUNT_ID']
 # SWITCH_ROLE = os.environ['SWITCH_ROLE']
 NAT_IP = os.environ['NAT_IP']
+TASK_ARN = os.environ['TASK_ARN']
 ACCESS_POLICY = 'arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy'
-
-def get_caller_identity():
-    try:
-        sts = boto3.client('sts')
-        response = sts.get_caller_identity()
-        return response.get('Arn')
-    except NoCredentialsError:
-        print("Error: AWS credentials not found")
-        return None
-    except ClientError as e:
-        print(f"Error: {e}")
-        return None
 
 def check_cluster():
     client = boto3.client(
@@ -41,7 +30,7 @@ def check_cluster():
         print(f'Cluster {EKS_CLUSTER_NAME} is now active')
         return public_access_cidrs
     
-def setup_cluster(principal_arn, public_access_cidrs):
+def setup_cluster(public_access_cidrs):
     eks = boto3.client(
         service_name='eks',
         region_name=AWS_REGION
@@ -51,21 +40,21 @@ def setup_cluster(principal_arn, public_access_cidrs):
         print(f'Adding access entry for {EKS_CLUSTER_NAME}')
         eks.create_access_entry(
             clusterName=EKS_CLUSTER_NAME,
-            principalArn=principal_arn,
+            principalArn=TASK_ARN,
             username='crowdstrike-eks-protection',
             type='STANDARD'
         )
     
     except botocore.exceptions.ClientError as error:
         if error.response['Error']['Code'] == "ResourceInUseException":
-            print(f'Skipping Access Entry for {EKS_CLUSTER_NAME}: {principal_arn} already exists')
+            print(f'Skipping Access Entry for {EKS_CLUSTER_NAME}: {TASK_ARN} already exists')
         else:
             print(error)
     try:
         print(f'Adding access policy for {EKS_CLUSTER_NAME}')
         eks.associate_access_policy(
             clusterName=EKS_CLUSTER_NAME,
-            principalArn=principal_arn,
+            principalArn=TASK_ARN,
             policyArn=ACCESS_POLICY,
             accessScope={
                 'type': 'cluster'
@@ -120,6 +109,6 @@ def setup_cluster(principal_arn, public_access_cidrs):
 
 # session = new_session()
 
-principal_arn = get_caller_identity()
+
 public_access_cidrs = check_cluster()
-setup_cluster(principal_arn, public_access_cidrs)
+setup_cluster(public_access_cidrs)
