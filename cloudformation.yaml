@@ -7,9 +7,8 @@ Metadata:
       - Label:
           default: Network Configuration
         Parameters:
-          - VpcId
-          - PrivateSubnetIds
-          - NatPublicIp
+          - VpcCidr
+          - Environment
       - Label:
           default: Falcon API Credentials
         Parameters:
@@ -26,17 +25,15 @@ Metadata:
 
 
 Parameters:
-  VpcId:
-    Type: AWS::EC2::VPC::Id
-    Description: VPC ID for the ECS service
-  
-  PrivateSubnetIds:
-    Type: List<AWS::EC2::Subnet::Id>
-    Description: Private subnet IDs for the ECS service
-
-  NatPublicIp:
+  VpcCidr:
     Type: String
-    Description: Public IP Address for the NAT Gateway
+    Default: '10.0.0.0/24'
+    Description: CIDR block for the VPC
+  
+  Environment:
+    Type: String
+    Default: 'cs-eks-protect'
+    Description: Environment name for resource tagging
   
   FalconClientId:
     Type: String
@@ -351,17 +348,6 @@ Resources:
                   StringEquals:
                     aws:RequestedRegion: !Ref AWS::Region
 
-  # Security Group for ECS Tasks
-  ECSSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Security group for CrowdStrike Falcon EKS Protection ECS tasks
-      VpcId: !Ref VpcId
-      SecurityGroupEgress:
-        - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
-          Description: Allow all outbound traffic
-
   # ECS Task Definition
   ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -418,7 +404,7 @@ Resources:
             - Name: AWS_REGION
               Value: 'SourcedFromEvent'
             - Name: NAT_IP
-              Value: !Ref NatPublicIp
+              Value: !Ref NatGateway1EIP
             - Name: TASK_ARN
               Value: !GetAtt ECSTaskRole.Arn
           Secrets:
@@ -453,8 +439,9 @@ Resources:
             NetworkConfiguration:
               AwsVpcConfiguration:
                 SecurityGroups:
-                  - !Ref ECSSecurityGroup
-                Subnets: !Ref PrivateSubnetIds
+                  - !Ref FargateTaskSecurityGroup
+                Subnets: 
+                  - !Ref PrivateSubnet1
                 AssignPublicIp: DISABLED
             PlatformVersion: LATEST
 
@@ -484,6 +471,132 @@ Resources:
                 Resource:
                   - !GetAtt ECSTaskExecutionRole.Arn
                   - !GetAtt ECSTaskRole.Arn
+
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-fargate-vpc'
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-fargate-igw'
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  # Public Subnets (for NAT Gateway)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 4, 8]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-fargate-public-subnet-1'
+
+  # Private Subnets (for Fargate tasks)
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 4, 8]]
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-fargate-private-subnet-1'
+
+  # NAT Gateway
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-fargate-nat-eip-1'
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-fargate-nat-1'
+
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-fargate-public-routes'
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-fargate-private-routes-1'
+
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+
+  # Security Group for Fargate Tasks
+  FargateTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${Environment}-fargate-task-sg'
+      GroupDescription: Security group for ECS Fargate tasks
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-fargate-task-sg'
 
 Outputs:
   ECSClusterArn:
