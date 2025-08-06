@@ -5,6 +5,14 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
+          default: Deployment Configuration
+        Parameters:
+          - Scope
+          - Regions
+          - OUs
+          - OrganizationId
+          - PermissionsBoundary
+      - Label:
           default: Network Configuration
         Parameters:
           - VpcCidr
@@ -22,9 +30,40 @@ Metadata:
           - DeployFalconContainer
           - DeployFalconAdmission
           - DeployFalconImageAnalyzer
+      - Label:
+          default: Resource Names
+        Parameters:
+          - ResourcePrefix
+          - ResourceSuffix
 
 
 Parameters:
+  Scope:
+    Type: String
+    Default: 'organization'
+    Description: Whether to deploy across the organization or locally to the current AWS account.
+    AllowedValues: ['organization', 'local account']
+
+  Regions:
+    Type: List<String>
+    Description: Which regions to deploy EventBridge rules.
+    Default: ''
+
+  OUs:
+    Type: List<String>
+    Description: Which OUs to onboard if Scope = organization.  If onboarding the entire organization, use the root OU (r-******).
+    Default: ''
+
+  OrganizationId:
+    Type: String
+    Description: Your AWS Organization Id if Scope = organization.
+    Default: ''
+
+  PermissionsBoundary:
+    Type: String
+    Description: The name of the policy used to set the permissions boundary for IAM roles.
+    Default: ''
+
   VpcCidr:
     Type: String
     Default: '10.0.0.0/24'
@@ -74,6 +113,21 @@ Parameters:
     Default: 'auto'
     AllowedValues: ['auto', 'true', 'false']
 
+  ResourcePrefix:
+    Type: String
+    Description: The prefix to be added to all resource names
+    Default: 'crowdstrike-eks-protection'
+
+  ResourceSuffix:
+    Type: String
+    Description: The suffix be added to all resource names
+    Default: ''
+
+Conditions:
+  SetPermissionsBoundary: !Not [ !Equals [ !Ref PermissionsBoundary, '' ]]
+  OrgDeployment: !Equals [ !Ref Scope, 'organization' ]
+  IsDelegatedAdmin: !Not [!Equals [!Ref OrganizationId, '']]
+
 Resources:
   # Store Falcon API credentials in Secrets Manager
   FalconCredentialsSecret:
@@ -88,21 +142,29 @@ Resources:
         }
 
   # GitHub repository configuration for script downloads
-  DeployScriptParameter:
+  EventHandlerParameter:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /crowdstrike/falcon-eks-protection/deploy-script-url
+      Name: /crowdstrike/falcon-eks-protection/handler-script-url
       Type: String
-      Description: GitHub URL for check and install script
-      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/check_and_install.sh"
+      Description: GitHub URL for event handler script
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/event_handler.sh"
 
   SetupScriptParameter:
     Type: AWS::SSM::Parameter
     Properties:
       Name: /crowdstrike/falcon-eks-protection/setup-script-url
       Type: String
-      Description: GitHub URL for check and install script
+      Description: GitHub URL for cluster setup script
       Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/setup_cluster.py"
+
+  DeployScriptParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /crowdstrike/falcon-eks-protection/deploy-script-url
+      Type: String
+      Description: GitHub URL for deploy operator script
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/deploy_operator.sh"
 
   # Store K8s Manifest for Falcon Deployment
   FalconDeploymentParameter:
@@ -134,126 +196,11 @@ Resources:
           deployAdmissionController: ${DeployFalconAdmission}
           deployImageAnalyzer: ${DeployFalconImageAnalyzer}
 
-  # Store Event Handler script
-  EventHandlerParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: /crowdstrike/falcon-eks-protection/event-handler-script
-      Type: String
-      Description: CrowdStrike Falcon event handler script
-      Value: !Sub |
-        #!/bin/bash
-        set -eo pipefail
-
-        # Function to parse EventBridge event for EKS cluster information
-        parse_event() {
-            echo "Processing EKS cluster event..."
-            
-            # Check if we have event data from EventBridge
-            if [[ -n "${!EVENT_DATA}" ]]; then
-                echo "Event data received: ${!EVENT_DATA}"
-                
-                # Extract cluster information from event
-                export EKS_CLUSTER_NAME=$(echo "${!EVENT_DATA}" | jq -r '.detail.responseElements.cluster.name // .detail.requestParameters.name // empty')
-                export AWS_REGION=$(echo "${!EVENT_DATA}" | jq -r '.detail.awsRegion // empty')
-                
-                if [[ -z "${!EKS_CLUSTER_NAME}" || "${!EKS_CLUSTER_NAME}" == "null" ]]; then
-                    echo "ERROR: Could not extract cluster name from event data"
-                    exit 1
-                fi
-                
-                echo "Extracted EKS cluster: ${!EKS_CLUSTER_NAME} in region: ${!AWS_REGION}"
-            else
-                echo "No EVENT_DATA found, checking environment variables..."
-                
-                # Check for environment variables if no event data
-                if [[ -n "${!EKS_CLUSTER_NAME}" ]]; then
-                    echo "Using EKS_CLUSTER_NAME from environment: ${!EKS_CLUSTER_NAME}"
-                fi
-                
-                if [[ -n "${!AWS_REGION}" ]]; then
-                    echo "Using AWS_REGION from environment: ${!AWS_REGION}"
-                fi
-            fi
-            
-            # Validate required environment variables
-            if [[ -z "${!EKS_CLUSTER_NAME}" ]]; then
-                echo "ERROR: EKS_CLUSTER_NAME environment variable is required"
-                exit 1
-            fi
-            
-            if [[ -z "${!AWS_REGION}" ]]; then
-                echo "ERROR: AWS_REGION environment variable is required"
-                exit 1
-            fi
-            
-            # Set default values for containerized execution
-            export NAMESPACE=${!NAMESPACE:-"default"}
-            export POD_NAME=${!POD_NAME:-"falcon-test-app"}
-            export DEPLOYMENT_NAME=${!DEPLOYMENT_NAME:-"falcon-test-app"}
-            export DEPLOY_FALCON_OPERATOR=${!DEPLOY_FALCON_OPERATOR:-"true"}
-            export DEPLOY_FALCON_RESOURCES=${!DEPLOY_FALCON_RESOURCES:-"true"}
-            
-            echo "Configuration:"
-            echo "  EKS Cluster: ${!EKS_CLUSTER_NAME}"
-            echo "  AWS Region: ${!AWS_REGION}"
-            echo "  Deploy Falcon Operator: ${!DEPLOY_FALCON_OPERATOR}"
-            echo "  Deploy Falcon Resources: ${!DEPLOY_FALCON_RESOURCES}"
-        }
-
-        # Function to wait for cluster to be available
-        wait_for_cluster() {
-            echo "Waiting for EKS cluster to be available..."
-            local max_attempts=30
-            local attempt=1
-            
-            while [[ $attempt -le $max_attempts ]]; do
-                if aws eks describe-cluster --name "${!EKS_CLUSTER_NAME}" --region "${!AWS_REGION}" --query 'cluster.status' --output text 2>/dev/null | grep "ACTIVE"; then
-                    echo "EKS cluster ${!EKS_CLUSTER_NAME} is active"
-                    return 0
-                fi
-                
-                echo "Waiting for cluster to be active (attempt $attempt/$max_attempts)..."
-                sleep 30
-                attempt=$((attempt + 1))
-            done
-            
-            echo "ERROR: EKS cluster did not become active within timeout"
-            return 1
-        }
-
-        # Main execution
-        main() {
-            echo "=== CrowdStrike Falcon EKS Protection - Event-Driven Execution ==="
-            
-            # Parse event data
-            parse_event
-            
-            # Wait for cluster to be available
-            wait_for_cluster
-            
-            # Setup Cluster Access
-            echo "Updating Access configuration for cluster ${!EKS_CLUSTER_NAME}..."
-            python3 setup_cluster.py
-
-            # Update kubeconfig
-            echo "Updating kubeconfig for cluster ${!EKS_CLUSTER_NAME}..."
-            aws eks update-kubeconfig --name "${!EKS_CLUSTER_NAME}" --region "${!AWS_REGION}"
-
-            # Execute the main installation script
-            echo "Executing CrowdStrike Falcon Operator installation..."
-            cd /app
-            exec ./check_and_install.sh
-        }
-
-        # Run main function
-        main "$$@"
-
   # ECS Cluster
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
-      ClusterName: crowdstrike-falcon-eks-protection
+      ClusterName: !Sub "${ResourcePrefix}-cluster${ResourceSuffix}"
 
   # CloudWatch Log Group
   LogGroup:
@@ -266,7 +213,12 @@ Resources:
   ECSTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: crowdstrike-falcon-eks-protection-execution-role
+      RoleName: !Sub "${ResourcePrefix}-execution-role${ResourceSuffix}"
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -291,7 +243,12 @@ Resources:
   ECSTaskRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: CrowdStrikeFalconEKSProtectionTaskRole
+      RoleName: !Sub "${ResourcePrefix}-task-role${ResourceSuffix}"
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -352,7 +309,7 @@ Resources:
   ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: crowdstrike-falcon-eks-protection
+      Family: !Sub "${ResourcePrefix}-cluster${ResourceSuffix}"
       NetworkMode: awsvpc
       RequiresCompatibilities: [FARGATE]
       Cpu: '1024'
@@ -366,7 +323,7 @@ Resources:
           EntryPoint: ["/bin/sh"]
           Command:
             - "-c"
-            - "SETUP_URL=$(aws ssm get-parameter --name $SETUP_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/setup_cluster.py $SETUP_URL && DEPLOY_URL=$(aws ssm get-parameter --name $DEPLOY_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/check_and_install.sh $DEPLOY_URL && aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text > /app/event-handler.sh && chmod +x /app/*.sh && chmod +x /app/*.py && mkdir -p /root/.kube /app && apk add --no-cache --quiet python3 py3-pip && pip3 install -qqq boto3 botocore && /app/event-handler.sh"                                        
+            - "HANDLER_URL=$(aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/event_handler.sh $HANDLER_URL && SETUP_URL=$(aws ssm get-parameter --name $SETUP_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/setup_cluster.py $SETUP_URL && DEPLOY_URL=$(aws ssm get-parameter --name $DEPLOY_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/deploy.sh $DEPLOY_URL && chmod +x /app/*.sh && chmod +x /app/*.py && mkdir -p /root/.kube /app && apk add --no-cache --quiet python3 py3-pip && pip3 install -qqq boto3 botocore && /app/event-handler.sh" 
           WorkingDirectory: "/app"
           LogConfiguration:
             LogDriver: awslogs
@@ -407,18 +364,173 @@ Resources:
               Value: !Ref NatGateway1EIP
             - Name: TASK_ARN
               Value: !GetAtt ECSTaskRole.Arn
+            - Name: SCOPE
+              Value: !Ref Scope
+            - Name: ACCOUNT_ID
+              Value: 'SourcedFromEvent'
+            - Name: SWITCH_ROLE
+              Value: !If OrgDeployment [ !Sub [ "${ResourcePrefix}-execution-role${ResourceSuffix}"], 'SingleAccount']
           Secrets:
             - Name: FALCON_CLIENT_ID
               ValueFrom: !Sub "${FalconCredentialsSecret}:client_id::"
             - Name: FALCON_CLIENT_SECRET
               ValueFrom: !Sub "${FalconCredentialsSecret}:client_secret::"
 
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-vpc${ResourceSuffix}"
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-igw${ResourceSuffix}"
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  # Public Subnets (for NAT Gateway)
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 4, 8]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-public-subnet${ResourceSuffix}"
+
+  # Private Subnets (for Fargate tasks)
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 4, 8]]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-private-subnet${ResourceSuffix}"
+
+  # NAT Gateway
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-nat-eip${ResourceSuffix}"
+
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-nat${ResourceSuffix}"
+
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-public-routes${ResourceSuffix}"
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-private-routes${ResourceSuffix}"
+
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+
+  # Security Group for Fargate Tasks
+  FargateTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${ResourcePrefix}-ecs-sg${ResourceSuffix}"
+      GroupDescription: Security group for ECS Fargate tasks
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourcePrefix}-ecs-sg${ResourceSuffix}"
+
+  # EventBridge Configuration
+  EventBus: 
+    Type: AWS::Events::EventBus
+    Properties: 
+      Name: !Sub "${ResourcePrefix}-eventbus${ResourceSuffix}"
+      Policy: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [{
+            "Sid": "AllowAllAccountsFromOrganizationToPutEvents",
+            "Effect": "Allow",
+            "Principal": "*",
+            "Action": "events:PutEvents",
+            "Resource": "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${ResourcePrefix}-eventbus${ResourceSuffix}",
+            "Condition": {
+              "StringEquals": {
+                "aws:PrincipalOrgID": "${OrganizationId}"
+              }
+            }
+          }]
+        }
+
   # EventBridge Rule for EKS Cluster Creation
-  EKSEventRule:
+  PrimaryEventRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: crowdstrike-falcon-eks-cluster-created
+      Name: !Sub "${ResourcePrefix}-rule${ResourceSuffix}"
       Description: Trigger CrowdStrike Falcon deployment when EKS cluster is created
+      EventBusName: !GetAtt EventBus.Arn
       EventPattern:
         source: ["aws.eks"]
         detail-type: ["AWS API Call via CloudTrail"]
@@ -449,6 +561,12 @@ Resources:
   EventBridgeRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub "${ResourcePrefix}-eb-role${ResourceSuffix}"
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -472,131 +590,324 @@ Resources:
                   - !GetAtt ECSTaskExecutionRole.Arn
                   - !GetAtt ECSTaskRole.Arn
 
-  # VPC
-  VPC:
-    Type: AWS::EC2::VPC
+  # StackSets
+  LocalEbStackSet:
+    Type: AWS::CloudFormation::StackSet
     Properties:
-      CidrBlock: !Ref VpcCidr
-      EnableDnsHostnames: true
-      EnableDnsSupport: true
-      Tags:
-        - Key: Name
-          Value: !Sub '${Environment}-fargate-vpc'
+      AdministrationRoleARN: !GetAtt StackSetAdministrationRole.Arn
+      ExecutionRoleName: !Ref StackSetExecutionRole
+      StackSetName: !Sub "${ResourcePrefix}-local-eb-stackset${ResourceSuffix}"
+      Description: StackSet to deploy local eventbridge rules in each region for CrowdStrike EKS Protection.
+      PermissionModel: SELF_MANAGED
+      Parameters:
+        - ParameterKey: EventBusName
+          ParameterValue: !Ref EventBus
+        - ParameterKey: EventBusAccount
+          ParameterValue: !Ref AWS::AccountId
+        - ParameterKey: EventBusRegion
+          ParameterValue: !Ref AWS::Region
+        - ParameterKey: EventBridgeRoleName
+          ParameterValue: !Sub "${ResourcePrefix}-eb-role${ResourceSuffix}"
+      OperationPreferences:
+        ConcurrencyMode: SOFT_FAILURE_TOLERANCE
+        MaxConcurrentPercentage: 100
+        FailureTolerancePercentage: 50
+        RegionConcurrencyType: PARALLEL
+      StackInstancesGroup:
+        - DeploymentTargets:
+            AccountFilterType: NONE
+            Accounts:
+              - !Ref AWS::AccountId
+          Regions: !Ref Regions
+      TemplateBody: |
+        ---
+        AWSTemplateFormatVersion: '2010-09-09'
+        Parameters:
+          EventBusRegion:
+            Type: String
+          EventBusAccount:
+            Type: String
+          EventBusName:
+            Type: String
+          EventBridgeRoleName:
+            Type: String
+        Resources:
+          EbRule:
+            Type: AWS::Events::Rule
+            Properties: 
+              Description: "Invoke CrowdStrike EKS Protection when clusters are created."
+              EventPattern: 
+                source: 
+                  - "aws.eks"
+                detail-type: 
+                  - "AWS API Call via CloudTrail"
+                detail: 
+                  eventSource: 
+                    - "eks.amazonaws.com"
+                  eventName:
+                    - "CreateCluster"
+              State: "ENABLED"
+              Name: crowdstrike-eks-rule
+              Targets:
+                - Arn: !Sub arn:${AWS::Partition}:events:${EventBusRegion}:${EventBusAccount}:event-bus/${EventBusName}
+                  Id: "CrowdStrikeEKSEventBus"
+                  RoleArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${EventBridgeRoleName}
 
-  # Internet Gateway
-  InternetGateway:
-    Type: AWS::EC2::InternetGateway
+  OrgEbStackSet:
+    Type: AWS::CloudFormation::StackSet
+    Condition: OrgDeployment
     Properties:
-      Tags:
-        - Key: Name
-          Value: !Sub '${Environment}-fargate-igw'
+      StackSetName: !Sub "${ResourcePrefix}-org-eb-stackset${ResourceSuffix}"
+      Description: StackSet to deploy eventbridge rules in each region of member accounts for CrowdStrike EKS Protection.
+      Parameters:
+        - ParameterKey: EventBusName
+          ParameterValue: !Ref EventBus
+        - ParameterKey: EventBusAccount
+          ParameterValue: !Ref AWS::AccountId
+        - ParameterKey: EventBusRegion
+          ParameterValue: !Ref AWS::Region
+        - ParameterKey: EventBridgeRoleName
+          ParameterValue: !Sub "${ResourcePrefix}-eb-role${ResourceSuffix}"
+      PermissionModel: SERVICE_MANAGED
+      CallAs: !If [ IsDelegatedAdmin, 'DELEGATED_ADMIN', 'SELF' ]
+      AutoDeployment:
+        Enabled: true
+        RetainStacksOnAccountRemoval: true
+      OperationPreferences:
+        ConcurrencyMode: SOFT_FAILURE_TOLERANCE
+        MaxConcurrentPercentage: 100
+        FailureTolerancePercentage: 50
+        RegionConcurrencyType: PARALLEL
+      StackInstancesGroup:
+        - DeploymentTargets:
+            AccountFilterType: NONE
+            OrganizationalUnitIds: !Ref OUs
+          Regions: !Ref Regions
+      TemplateBody: |
+        ---
+        AWSTemplateFormatVersion: '2010-09-09'
 
-  InternetGatewayAttachment:
-    Type: AWS::EC2::VPCGatewayAttachment
-    Properties:
-      InternetGatewayId: !Ref InternetGateway
-      VpcId: !Ref VPC
+        Parameters:
+          EventBusRegion:
+            Type: String
+          EventBusAccount:
+            Type: String
+          EventBusName:
+            Type: String
+          EventBridgeRoleName:
+            Type: String
 
-  # Public Subnets (for NAT Gateway)
-  PublicSubnet1:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId: !Ref VPC
-      AvailabilityZone: !Select [0, !GetAZs '']
-      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 4, 8]]
-      MapPublicIpOnLaunch: true
-      Tags:
-        - Key: Name
-          Value: !Sub '${Environment}-fargate-public-subnet-1'
+        Resources:
+          EKSRule:
+            Type: AWS::Events::Rule
+            Properties: 
+              Description: "Invoke CrowdStrike EKS Protection when clusters are created."
+              EventPattern: 
+                source: 
+                  - "aws.eks"
+                detail-type: 
+                  - "AWS API Call via CloudTrail"
+                detail: 
+                  eventSource: 
+                    - "eks.amazonaws.com"
+                  eventName:
+                    - "CreateCluster"
+              State: "ENABLED"
+              Name: crowdstrike-eks-rule
+              Targets:
+                - Arn: !Sub arn:${AWS::Partition}:events:${EventBusRegion}:${EventBusAccount}:event-bus/${EventBusName}
+                  Id: "CrowdStrikeEKSEventBus"
+                  RoleArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${EventBridgeRoleName}
 
-  # Private Subnets (for Fargate tasks)
-  PrivateSubnet1:
-    Type: AWS::EC2::Subnet
+  OrgRolesStackSet:
+    Type: AWS::CloudFormation::StackSet
+    Condition: OrgDeployment
     Properties:
-      VpcId: !Ref VPC
-      AvailabilityZone: !Select [0, !GetAZs '']
-      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 4, 8]]
-      Tags:
-        - Key: Name
-          Value: !Sub '${Environment}-fargate-private-subnet-1'
+      StackSetName: !Sub "${ResourcePrefix}-org-roles-stackset${ResourceSuffix}"
+      Description: StackSet to deploy IAM roles to member accounts for CrowdStrike EKS Protection.
+      Capabilities:
+        - CAPABILITY_NAMED_IAM
+      Parameters:
+        - ParameterKey: EKSExecutionRoleName
+          ParameterValue: !Sub "${ResourcePrefix}-execution-role${ResourceSuffix}"
+        - ParameterKey: EventBridgeRoleName
+          ParameterValue: !Sub "${ResourcePrefix}-eb-role${ResourceSuffix}"
+        - ParameterKey: EventBusAccount
+          ParameterValue: !Ref AWS::AccountId
+        - ParameterKey: EventBusName
+          ParameterValue: !Ref EventBus
+        - ParameterKey: ECSTaskRole
+          ParameterValue: !Ref ECSTaskRole
+        - ParameterKey: PermissionsBoundary
+          ParameterValue: !Ref PermissionsBoundary
+      PermissionModel: SERVICE_MANAGED
+      CallAs: !If [ IsDelegatedAdmin, 'DELEGATED_ADMIN', 'SELF' ]
+      AutoDeployment:
+        Enabled: true
+        RetainStacksOnAccountRemoval: false
+      OperationPreferences:
+        ConcurrencyMode: SOFT_FAILURE_TOLERANCE
+        MaxConcurrentPercentage: 100
+        FailureTolerancePercentage: 50
+        RegionConcurrencyType: PARALLEL
+      StackInstancesGroup:
+        - DeploymentTargets:
+            AccountFilterType: NONE
+            OrganizationalUnitIds: !Ref OUs
+          Regions:
+            - !Ref AWS::Region
+      TemplateBody: |
+        ---
+        AWSTemplateFormatVersion: '2010-09-09'
 
-  # NAT Gateway
-  NatGateway1EIP:
-    Type: AWS::EC2::EIP
-    DependsOn: InternetGatewayAttachment
-    Properties:
-      Domain: vpc
-      Tags:
-        - Key: Name
-          Value: !Sub '${Environment}-fargate-nat-eip-1'
+        Parameters:
+          EKSExecutionRoleName:
+            Type: String
+          EventBridgeRoleName:
+            Type: String
+          EventBusAccount:
+            Type: String
+          EventBusName:
+            Type: String
+          ECSTaskRole:
+            Type: String
 
-  NatGateway1:
-    Type: AWS::EC2::NatGateway
-    Properties:
-      AllocationId: !GetAtt NatGateway1EIP.AllocationId
-      SubnetId: !Ref PublicSubnet1
-      Tags:
-        - Key: Name
-          Value: !Sub '${Environment}-fargate-nat-1'
+        Resources:
+          EventBridgeRole:
+            Type: 'AWS::IAM::Role'
+            Properties:
+              RoleName: !Ref EventBridgeRoleName
+              AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: Allow
+                    Principal:
+                      Service:
+                        - events.amazonaws.com
+                    Action:
+                      - 'sts:AssumeRole'
+              Policies:
+                - PolicyName: crowdstrike-eks-eventbridge-policy
+                  PolicyDocument:
+                    Version: "2012-10-17"
+                    Statement:
+                      - Effect: Allow
+                        Action:
+                          - events:PutEvents
+                        Resource:
+                          - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${EventBusAccount}:event-bus/${EventBusName}
+          
+          EKSExecutionRole:
+            Type: 'AWS::IAM::Role'
+            Properties:
+              RoleName: !Ref EKSExecutionRoleName
+              AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                  - Effect: Allow
+                    Principal:
+                      AWS: 
+                        - !Sub arn:${AWS::Partition}:iam::${EventBusAccount}:role/${EKSExecutionRoleName}
+                        - !Sub arn:${AWS::Partition}:sts::${EventBusAccount}:role/${ECSTaskRole}
+                    Action:
+                      - 'sts:AssumeRole'
+              Policies:
+                - PolicyName: crowdstrike-eks-execution-policy
+                  PolicyDocument:
+                    Version: "2012-10-17"
+                    Statement:
+                      - Effect: Allow
+                        Action: 
+                          - eks:DescribeCluster
+                          - eks:ListClusters
+                          - eks:ListFargateProfiles
+                          - ec2:DescribeRegions
+                          - eks:UpdateClusterConfig
+                          - eks:DescribeUpdate
+                          - eks:AssociateAccessPolicy
+                        Resource: '*'
+                      - Effect: Allow
+                        Action: 
+                          - ec2:DescribeRegions
+                        Resource: '*'
+                      - Effect: Allow
+                        Action:
+                          - eks:UpdateAccessEntry
+                          - eks:CreateAccessEntry
+                          - eks:DeleteAccessEntry
+                          - eks:DescribeAccessEntry
+                        Resource: 
+                          - !Sub 'arn:${AWS::Partition}:eks:*:${AWS::AccountId}:cluster/*'
+                          - !Sub 'arn:${AWS::Partition}:eks:*:${AWS::AccountId}:access-entry/*/${ECSTaskRole}/${EventBusAccount}/$/*'
 
-  # Route Tables
-  PublicRouteTable:
-    Type: AWS::EC2::RouteTable
+  # StackSet Roles
+  StackSetAdministrationRole:
+    Type: AWS::IAM::Role
+    Condition: OrgDeployment
     Properties:
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub '${Environment}-fargate-public-routes'
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
+      RoleName: !Sub "${ResourcePrefix}-stackset-admin-role${ResourceSuffix}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          Action: sts:AssumeRole
+          Principal:
+            Service: cloudformation.amazonaws.com
+          Effect: Allow
+          Sid: ''
+      Policies:
+        - PolicyName: crowdstrike-eks-stackset-execution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action: sts:AssumeRole
+                Resource: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ResourcePrefix}-stackset-execution-role${ResourceSuffix}"
+                Effect: Allow
 
-  DefaultPublicRoute:
-    Type: AWS::EC2::Route
-    DependsOn: InternetGatewayAttachment
+  StackSetExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: OrgDeployment
     Properties:
-      RouteTableId: !Ref PublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0
-      GatewayId: !Ref InternetGateway
-
-  PublicSubnet1RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      RouteTableId: !Ref PublicRouteTable
-      SubnetId: !Ref PublicSubnet1
-
-  PrivateRouteTable1:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub '${Environment}-fargate-private-routes-1'
-
-  DefaultPrivateRoute1:
-    Type: AWS::EC2::Route
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable1
-      DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGateway1
-
-  PrivateSubnet1RouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      RouteTableId: !Ref PrivateRouteTable1
-      SubnetId: !Ref PrivateSubnet1
-
-  # Security Group for Fargate Tasks
-  FargateTaskSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupName: !Sub '${Environment}-fargate-task-sg'
-      GroupDescription: Security group for ECS Fargate tasks
-      VpcId: !Ref VPC
-      SecurityGroupEgress:
-        - IpProtocol: -1
-          CidrIp: 0.0.0.0/0
-          Description: Allow all outbound traffic
-      Tags:
-        - Key: Name
-          Value: !Sub '${Environment}-fargate-task-sg'
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
+      RoleName: !Sub "${ResourcePrefix}-stackset-execution-role${ResourceSuffix}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          Action: sts:AssumeRole
+          Principal:
+            AWS: !GetAtt StackSetAdministrationRole.Arn
+          Effect: Allow
+          Sid: ''
+      Policies:
+        - PolicyName: crowdstrike-eks-stackset-execution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - events:DeleteRule
+                - events:PutTargets
+                - events:DescribeRule
+                - iam:PassRole
+                - events:EnableRule
+                - events:PutRule
+                - events:RemoveTargets
+                - events:DisableRule
+                Resource:
+                - !Sub arn:${AWS::Partition}:events:*:*:rule/cs-*
+                - !Sub arn:${AWS::Partition}:events:*:*:rule/*/cs-*
+                - !Sub arn:${AWS::Partition}:iam::*:role/CrowdStrike*
+                Effect: Allow
+              - Action: cloudformation:*
+                Resource: '*'
+                Effect: Allow
 
 Outputs:
   ECSClusterArn:
@@ -613,6 +924,6 @@ Outputs:
 
   EventRuleArn:
     Description: ARN of the EventBridge Rule
-    Value: !GetAtt EKSEventRule.Arn
+    Value: !GetAtt PrimaryEventRule.Arn
     Export:
       Name: !Sub "${AWS::StackName}-EventRuleArn"
