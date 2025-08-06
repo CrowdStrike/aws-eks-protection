@@ -16,7 +16,6 @@ Metadata:
           default: Network Configuration
         Parameters:
           - VpcCidr
-          - Environment
       - Label:
           default: Falcon API Credentials
         Parameters:
@@ -66,14 +65,9 @@ Parameters:
 
   VpcCidr:
     Type: String
-    Default: '10.0.0.0/24'
+    Default: '10.0.0.0/22'
     Description: CIDR block for the VPC
-  
-  Environment:
-    Type: String
-    Default: 'cs-eks-protect'
-    Description: Environment name for resource tagging
-  
+
   FalconClientId:
     Type: String
     Description: CrowdStrike Falcon Client ID
@@ -369,7 +363,11 @@ Resources:
             - Name: ACCOUNT_ID
               Value: 'SourcedFromEvent'
             - Name: SWITCH_ROLE
-              Value: !If OrgDeployment [ !Sub [ "${ResourcePrefix}-execution-role${ResourceSuffix}"], 'SingleAccount']
+              Value: 
+                Fn::If:
+                  - OrgDeployment
+                  - !Sub '${ResourcePrefix}-execution-role${ResourceSuffix}'
+                  - 'SingleAccount'
           Secrets:
             - Name: FALCON_CLIENT_ID
               ValueFrom: !Sub "${FalconCredentialsSecret}:client_id::"
@@ -843,7 +841,6 @@ Resources:
   # StackSet Roles
   StackSetAdministrationRole:
     Type: AWS::IAM::Role
-    Condition: OrgDeployment
     Properties:
       PermissionsBoundary:
         Fn::If:
@@ -870,7 +867,6 @@ Resources:
 
   StackSetExecutionRole:
     Type: AWS::IAM::Role
-    Condition: OrgDeployment
     Properties:
       PermissionsBoundary:
         Fn::If:
@@ -901,9 +897,9 @@ Resources:
                 - events:RemoveTargets
                 - events:DisableRule
                 Resource:
-                - !Sub arn:${AWS::Partition}:events:*:*:rule/cs-*
-                - !Sub arn:${AWS::Partition}:events:*:*:rule/*/cs-*
-                - !Sub arn:${AWS::Partition}:iam::*:role/CrowdStrike*
+                - !Sub arn:${AWS::Partition}:events:*:*:rule/crowdstrike-eks-rule*
+                - !Sub arn:${AWS::Partition}:events:*:*:rule/*/crowdstrike-eks-rule*
+                - !Sub arn:${AWS::Partition}:iam::*:role/${ResourcePrefix}-eb-role${ResourceSuffix}
                 Effect: Allow
               - Action: cloudformation:*
                 Resource: '*'
