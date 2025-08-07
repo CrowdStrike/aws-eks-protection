@@ -23,11 +23,6 @@ setup_configuration() {
         exit 1
     fi
     
-    log "INFO" "Event-sourced values:"
-    log "INFO" "  EKS Cluster: ${EKS_CLUSTER_NAME}"
-    log "INFO" "  AWS Region: ${AWS_REGION}"
-    log "INFO" "  Account ID: ${ACCOUNT_ID:-'Not provided'}"
-    
     # Set default values for containerized execution
     export NAMESPACE=${NAMESPACE:-"default"}
     export POD_NAME=${POD_NAME:-"falcon-test-app"}
@@ -38,6 +33,7 @@ setup_configuration() {
     log "INFO" "Configuration:"
     log "INFO" "  EKS Cluster: ${EKS_CLUSTER_NAME}"
     log "INFO" "  AWS Region: ${AWS_REGION}"
+    log "INFO" "  Account ID: ${ACCOUNT_ID:-'Not provided'}"
     log "INFO" "  Deploy Falcon Operator: ${DEPLOY_FALCON_OPERATOR}"
     log "INFO" "  Deploy Falcon Resources: ${DEPLOY_FALCON_RESOURCES}"
 }
@@ -102,7 +98,7 @@ main() {
     # Execute the main installation script
     log "INFO" "Executing CrowdStrike Falcon Operator installation..."
     cd /app
-    exec ./check_and_install.sh
+    exec ./deploy_operator.sh
 }
 
 # Run main function

@@ -362,8 +362,6 @@ Resources:
               Value: !Ref Scope
             - Name: ACCOUNT_ID
               Value: 'SourcedFromEvent'
-            - Name: EVENT_DATA
-              Value: 'SourcedFromEvent'
             - Name: SWITCH_ROLE
               Value: 
                 Fn::If:
@@ -549,8 +547,10 @@ Resources:
             InputPathsMap:
               clusterName: "$.detail.responseElements.cluster.name"
               awsRegion: "$.detail.awsRegion" 
-              accountId: "$.detail.awsAccountId"
-              fullEvent: "$"
+              accountId: "$.detail.userIdentity.accountId"
+              eventSource: "$.detail.eventSource"
+              eventName: "$.detail.eventName"
+              eventTime: "$.detail.eventTime"
             InputTemplate: |
               {
                 "containerOverrides": [
@@ -560,7 +560,9 @@ Resources:
                       {"name": "EKS_CLUSTER_NAME", "value": "<clusterName>"},
                       {"name": "AWS_REGION", "value": "<awsRegion>"},
                       {"name": "ACCOUNT_ID", "value": "<accountId>"},
-                      {"name": "EVENT_DATA", "value": "<fullEvent>"}
+                      {"name": "EVENT_SOURCE", "value": "<eventSource>"},
+                      {"name": "EVENT_NAME", "value": "<eventName>"},
+                      {"name": "EVENT_TIME", "value": "<eventTime>"}
                     ]
                   }
                 ]
