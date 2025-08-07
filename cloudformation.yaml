@@ -11,6 +11,7 @@ Metadata:
           - Regions
           - OUs
           - OrganizationId
+          - DelegatedAdmin
           - PermissionsBoundary
       - Label:
           default: Network Configuration
@@ -57,6 +58,12 @@ Parameters:
     Type: String
     Description: Your AWS Organization Id if Scope = organization.
     Default: ''
+
+  DelegatedAdmin:
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+    Description: Indicates whether this is a Delegated Administrator account.
+    Type: String
 
   PermissionsBoundary:
     Type: String
@@ -120,7 +127,7 @@ Parameters:
 Conditions:
   SetPermissionsBoundary: !Not [ !Equals [ !Ref PermissionsBoundary, '' ]]
   OrgDeployment: !Equals [ !Ref Scope, 'organization' ]
-  IsDelegatedAdmin: !Not [!Equals [!Ref OrganizationId, '']]
+  IsDelegatedAdmin: !Equals [ !Ref 'DelegatedAdmin', true ]
 
 Resources:
   # Store Falcon API credentials in Secrets Manager
@@ -221,7 +228,7 @@ Resources:
               Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
       Policies:
         - PolicyName: SecretsManagerAccess
           PolicyDocument:
@@ -268,10 +275,10 @@ Resources:
                 Action:
                   - ssm:GetParameter
                 Resource:
-                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SetupScriptParameter}'
-                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DeployScriptParameter}'
-                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${EventHandlerParameter}'
-                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${FalconDeploymentParameter}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SetupScriptParameter}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DeployScriptParameter}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${EventHandlerParameter}'
+                  - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${FalconDeploymentParameter}'
         - PolicyName: EKSFullAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -362,6 +369,8 @@ Resources:
               Value: !Ref Scope
             - Name: ACCOUNT_ID
               Value: 'SourcedFromEvent'
+            - Name: PARTITION
+              Value: !Ref AWS::Partition
             - Name: SWITCH_ROLE
               Value: 
                 Fn::If:
@@ -513,7 +522,7 @@ Resources:
             "Effect": "Allow",
             "Principal": "*",
             "Action": "events:PutEvents",
-            "Resource": "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${ResourcePrefix}-eventbus${ResourceSuffix}",
+            "Resource": "arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${ResourcePrefix}-eventbus${ResourceSuffix}",
             "Condition": {
               "StringEquals": {
                 "aws:PrincipalOrgID": "${OrganizationId}"
@@ -820,12 +829,23 @@ Resources:
             Type: String
           ECSTaskRole:
             Type: String
+          PermissionsBoundary:
+            Type: String
+            Default: ''
+
+        Conditions:
+          SetPermissionsBoundary: !Not [ !Equals [ !Ref PermissionsBoundary, '' ]]
 
         Resources:
           EventBridgeRole:
             Type: 'AWS::IAM::Role'
             Properties:
               RoleName: !Ref EventBridgeRoleName
+              PermissionsBoundary:
+                Fn::If:
+                  - SetPermissionsBoundary
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+                  - Ref: AWS::NoValue
               AssumeRolePolicyDocument:
                 Version: "2012-10-17"
                 Statement:
@@ -850,6 +870,11 @@ Resources:
             Type: 'AWS::IAM::Role'
             Properties:
               RoleName: !Ref EKSExecutionRoleName
+              PermissionsBoundary:
+                Fn::If:
+                  - SetPermissionsBoundary
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+                  - Ref: AWS::NoValue
               AssumeRolePolicyDocument:
                 Version: "2012-10-17"
                 Statement:

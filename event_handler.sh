@@ -70,8 +70,9 @@ main() {
     if [ ! "$SCOPE" = "local account" ]; then
         log "INFO" "Assuming role: $SWITCH_ROLE"
         
+        arn="arn:${PARTITION}:iam::${ACCOUNT_ID}:role/${SWITCH_ROLE}"
         CREDENTIALS=$(aws sts assume-role \
-            --role-arn "$SWITCH_ROLE" \
+            --role-arn "$arn" \
             --role-session-name "cs-eks-protect-$(date +%s)" \
             --output json)
         
