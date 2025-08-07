@@ -5,16 +5,7 @@ set -eo pipefail
 log() {
     local level=$1
     local message=$2
-    local color=""
-    
-    case $level in
-        "ERROR") color=$RED ;;
-        "WARNING") color=$YELLOW ;;
-        "SUCCESS") color=$GREEN ;;
-        *) color=$NC ;;
-    esac
-    
-    echo -e "${color}[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message${NC}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message"
 }
 
 # Function to validate and setup configuration
@@ -80,17 +71,17 @@ main() {
     setup_configuration
     
     # assume role
-    if [[ -n "$ASSUME_ROLE_ARN" ]]; then
-        log "INFO" "Assuming role: $ASSUME_ROLE_ARN"
+    if [ ! "$SCOPE" = "local account" ]; then
+        log "INFO" "Assuming role: $SWITCH_ROLE"
         
         CREDENTIALS=$(aws sts assume-role \
-            --role-arn "$ASSUME_ROLE_ARN" \
+            --role-arn "$SWITCH_ROLE" \
             --role-session-name "cs-eks-protect-$(date +%s)" \
             --output json)
         
-        export AWS_ACCESS_KEY_ID=$(log "INFO" "$CREDENTIALS" | jq -r '.Credentials.AccessKeyId')
-        export AWS_SECRET_ACCESS_KEY=$(log "INFO" "$CREDENTIALS" | jq -r '.Credentials.SecretAccessKey')
-        export AWS_SESSION_TOKEN=$(log "INFO" "$CREDENTIALS" | jq -r '.Credentials.SessionToken')
+        export AWS_ACCESS_KEY_ID=$(echo "$CREDENTIALS" | jq -r '.Credentials.AccessKeyId')
+        export AWS_SECRET_ACCESS_KEY=$(echo "$CREDENTIALS" | jq -r '.Credentials.SecretAccessKey')
+        export AWS_SESSION_TOKEN=$(echo "$CREDENTIALS" | jq -r '.Credentials.SessionToken')
         
         log "INFO" "Role assumed successfully"
     else
