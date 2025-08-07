@@ -92,35 +92,6 @@ def setup_cluster(eks, public_access_cidrs):
     logger.info(f'Cluster: {EKS_CLUSTER_NAME} is now setup')
     return
 
-# Cross Account
-def new_session():
-    try:
-        sts_connection = boto3.client('sts')
-        credentials = sts_connection.assume_role(
-            RoleArn=f'arn:aws:iam::{ACCOUNT_ID}:role/{SWITCH_ROLE}',
-            RoleSessionName=f'crowdstrike-eks-{ACCOUNT_ID}'
-        )
-        session = boto3.session.Session(
-            aws_access_key_id=credentials['Credentials']['AccessKeyId'],
-            aws_secret_access_key=credentials['Credentials']['SecretAccessKey'],
-            aws_session_token=credentials['Credentials']['SessionToken'],
-            region_name=AWS_REGION
-        )
-        return session.client(
-            service_name='eks',
-            region_name=AWS_REGION
-        )
-    except sts_connection.exceptions.ClientError as exc:
-        # Print the error and continue
-        logger.error(f"Cannot access adjacent account: {ACCOUNT_ID} - {exc}")
-        return None
-
-if SCOPE == 'organization':
-    eks = new_session()
-else:
-    eks = boto3.client(
-            service_name='eks',
-            region_name=AWS_REGION
-        )
+eks = boto3.client(service_name='eks',region_name=AWS_REGION)
 public_access_cidrs = check_cluster(eks)
 setup_cluster(eks, public_access_cidrs)
