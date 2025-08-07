@@ -2,6 +2,15 @@ import os
 import time
 import boto3
 import botocore
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 AWS_REGION = os.environ['AWS_REGION']
 SCOPE = os.environ['SCOPE']
@@ -23,7 +32,7 @@ def check_cluster(eks):
             name=EKS_CLUSTER_NAME
         )
     else:
-        print(f'Cluster {EKS_CLUSTER_NAME} is now active')
+        logger.info(f'Cluster {EKS_CLUSTER_NAME} is now active')
         return public_access_cidrs
     
 def setup_cluster(eks, public_access_cidrs):
@@ -32,7 +41,7 @@ def setup_cluster(eks, public_access_cidrs):
     else:
         arn = TASK_ARN
     try:
-        print(f'Adding access entry for {EKS_CLUSTER_NAME}')
+        logger.info(f'Adding access entry for {EKS_CLUSTER_NAME}')
         eks.create_access_entry(
             clusterName=EKS_CLUSTER_NAME,
             principalArn=arn,
@@ -42,11 +51,11 @@ def setup_cluster(eks, public_access_cidrs):
     
     except botocore.exceptions.ClientError as error:
         if error.response['Error']['Code'] == "ResourceInUseException":
-            print(f'Skipping Access Entry for {EKS_CLUSTER_NAME}: {arn} already exists')
+            logger.warning(f'Skipping Access Entry for {EKS_CLUSTER_NAME}: {arn} already exists')
         else:
-            print(error)
+            logger.error(error)
     try:
-        print(f'Adding access policy for {EKS_CLUSTER_NAME}')
+        logger.info(f'Adding access policy for {EKS_CLUSTER_NAME}')
         eks.associate_access_policy(
             clusterName=EKS_CLUSTER_NAME,
             principalArn=arn,
@@ -56,9 +65,9 @@ def setup_cluster(eks, public_access_cidrs):
             }
         )
     except botocore.exceptions.ClientError as error:
-        print(error)
+        logger.error(error)
     try:
-        print(f'Adding NAT IP for {EKS_CLUSTER_NAME}')
+        logger.info(f'Adding NAT IP for {EKS_CLUSTER_NAME}')
         public_access_cidrs.append(f'{NAT_IP}/32')
         response = eks.update_cluster_config(
             name=EKS_CLUSTER_NAME,
@@ -72,15 +81,15 @@ def setup_cluster(eks, public_access_cidrs):
             updateId=update_id
         )
         while update_response['update']['status'] in 'InProgress':
-            print('waiting for update to complete...')
+            logger.info('waiting for update to complete...')
             time.sleep(30)
             update_response = eks.describe_update(
                 name=EKS_CLUSTER_NAME,
                 updateId=update_id
             )
     except botocore.exceptions.ClientError as error:
-        print(error)
-    print(f'Cluster: {EKS_CLUSTER_NAME} is now setup')
+        logger.error(error)
+    logger.info(f'Cluster: {EKS_CLUSTER_NAME} is now setup')
     return
 
 # Cross Account
@@ -103,7 +112,7 @@ def new_session():
         )
     except sts_connection.exceptions.ClientError as exc:
         # Print the error and continue
-        print("Cannot access adjacent account: ", ACCOUNT_ID, exc)
+        logger.error(f"Cannot access adjacent account: {ACCOUNT_ID} - {exc}")
         return None
 
 if SCOPE == 'organization':

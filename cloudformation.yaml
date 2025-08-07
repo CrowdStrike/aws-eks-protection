@@ -317,7 +317,7 @@ Resources:
           EntryPoint: ["/bin/sh"]
           Command:
             - "-c"
-            - "HANDLER_URL=$(aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/event_handler.sh $HANDLER_URL && SETUP_URL=$(aws ssm get-parameter --name $SETUP_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/setup_cluster.py $SETUP_URL && DEPLOY_URL=$(aws ssm get-parameter --name $DEPLOY_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/deploy.sh $DEPLOY_URL && chmod +x /app/*.sh && chmod +x /app/*.py && mkdir -p /root/.kube /app && apk add --no-cache --quiet python3 py3-pip && pip3 install -qqq boto3 botocore && /app/event-handler.sh" 
+            - "HANDLER_URL=$(aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/event_handler.sh $HANDLER_URL && SETUP_URL=$(aws ssm get-parameter --name $SETUP_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/setup_cluster.py $SETUP_URL && DEPLOY_URL=$(aws ssm get-parameter --name $DEPLOY_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/deploy.sh $DEPLOY_URL && chmod +x /app/*.sh && chmod +x /app/*.py && mkdir -p /root/.kube /app && apk add --no-cache --quiet python3 py3-pip && pip3 install -qqq boto3 botocore && /app/event_handler.sh" 
           WorkingDirectory: "/app"
           LogConfiguration:
             LogDriver: awslogs
@@ -361,6 +361,8 @@ Resources:
             - Name: SCOPE
               Value: !Ref Scope
             - Name: ACCOUNT_ID
+              Value: 'SourcedFromEvent'
+            - Name: EVENT_DATA
               Value: 'SourcedFromEvent'
             - Name: SWITCH_ROLE
               Value: 
@@ -542,7 +544,27 @@ Resources:
       Targets:
         - Id: "FalconEKSProtectionTarget"
           Arn: !GetAtt ECSCluster.Arn
-          RoleArn: !GetAtt EventBridgeRole.Arn
+          RoleArn: !GetAtt PrimaryEventRole.Arn
+          InputTransformer:
+            InputPathsMap:
+              clusterName: "$.detail.responseElements.cluster.name"
+              awsRegion: "$.detail.awsRegion" 
+              accountId: "$.detail.awsAccountId"
+              fullEvent: "$"
+            InputTemplate: |
+              {
+                "containerOverrides": [
+                  {
+                    "name": "falcon-eks-protection",
+                    "environment": [
+                      {"name": "EKS_CLUSTER_NAME", "value": "<clusterName>"},
+                      {"name": "AWS_REGION", "value": "<awsRegion>"},
+                      {"name": "ACCOUNT_ID", "value": "<accountId>"},
+                      {"name": "EVENT_DATA", "value": "<fullEvent>"}
+                    ]
+                  }
+                ]
+              }
           EcsParameters:
             TaskDefinitionArn: !Ref ECSTaskDefinition
             LaunchType: FARGATE
@@ -556,10 +578,10 @@ Resources:
             PlatformVersion: LATEST
 
   # EventBridge Service Role
-  EventBridgeRole:
+  PrimaryEventRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ResourcePrefix}-eb-role${ResourceSuffix}"
+      RoleName: !Sub "${ResourcePrefix}-primary-eb-role${ResourceSuffix}"
       PermissionsBoundary:
         Fn::If:
           - SetPermissionsBoundary
@@ -588,6 +610,33 @@ Resources:
                   - !GetAtt ECSTaskExecutionRole.Arn
                   - !GetAtt ECSTaskRole.Arn
 
+  # EventBridge Service Role
+  ForwardEventRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourcePrefix}-forward-eb-role${ResourceSuffix}"
+      PermissionsBoundary:
+        Fn::If:
+          - SetPermissionsBoundary
+          - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${PermissionsBoundary}'
+          - Ref: AWS::NoValue
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeForwardEvents
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${ResourcePrefix}-eventbus${ResourceSuffix}'
+  
   # StackSets
   LocalEbStackSet:
     Type: AWS::CloudFormation::StackSet
@@ -605,7 +654,7 @@ Resources:
         - ParameterKey: EventBusRegion
           ParameterValue: !Ref AWS::Region
         - ParameterKey: EventBridgeRoleName
-          ParameterValue: !Sub "${ResourcePrefix}-eb-role${ResourceSuffix}"
+          ParameterValue: !Sub "${ResourcePrefix}-forward-eb-role${ResourceSuffix}"
       OperationPreferences:
         ConcurrencyMode: SOFT_FAILURE_TOLERANCE
         MaxConcurrentPercentage: 100
@@ -785,7 +834,7 @@ Resources:
                     Action:
                       - 'sts:AssumeRole'
               Policies:
-                - PolicyName: crowdstrike-eks-eventbridge-policy
+                - PolicyName: EventBridgeForwardEvents
                   PolicyDocument:
                     Version: "2012-10-17"
                     Statement:
@@ -899,7 +948,7 @@ Resources:
                 Resource:
                 - !Sub arn:${AWS::Partition}:events:*:*:rule/crowdstrike-eks-rule*
                 - !Sub arn:${AWS::Partition}:events:*:*:rule/*/crowdstrike-eks-rule*
-                - !Sub arn:${AWS::Partition}:iam::*:role/${ResourcePrefix}-eb-role${ResourceSuffix}
+                - !Sub arn:${AWS::Partition}:iam::*:role/${ResourcePrefix}-forward-eb-role${ResourceSuffix}
                 Effect: Allow
               - Action: cloudformation:*
                 Resource: '*'
