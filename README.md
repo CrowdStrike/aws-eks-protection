@@ -1,31 +1,30 @@
 # CrowdStrike Falcon EKS Protection
 
-An automated solution for deploying CrowdStrike Falcon Operator to EKS clusters using event-driven architecture.
+An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and ImageAnalyzer to EKS clusters across your AWS Organization using event-driven architecture.
 
 ## ✨ Features
 
-- 🚀 **Event-Driven Automation**: Automatically installs Falcon Operator when EKS clusters are created
+- 🚀 **Event-Driven Automation**: Automatically installs Falcon components when EKS clusters are created
 - 🐳 **No Build Dependencies**: Uses public `alpine/k8s:1.28.4` container image
 - 🎯 **Intelligent Sensor Selection**: Auto-detects cluster type and deploys appropriate sensors
 - 🔒 **Secure**: API credentials stored in AWS Secrets Manager
-- 📊 **Observable**: Complete CloudWatch logging and monitoring
+- 📊 **Observable**: Complete CloudWatch logging with structured output
+- 🌐 **Self-Contained Infrastructure**: Creates own VPC and networking
+- 🏢 **Organization Support**: Deploy across AWS Organizations or single accounts
 
 ## 🛠 Prerequisites
 
 1. **AWS CLI** configured with appropriate permissions
-2. **VPC and Private Subnets** for ECS deployment
-3. **CrowdStrike Falcon API Credentials** with required permissions:
+2. **CrowdStrike Falcon API Credentials** with required permissions:
    - `Falcon Images Download: Read`
    - `Sensor Download: Read`
 
-## 🚀 Quick Start
+## 🚀 Quick Start Deployment
 
 ### 1. Set Required Environment Variables
 
 ```bash
 export AWS_REGION="us-west-2"
-export VPC_ID="vpc-xxxxxxxx"
-export PRIVATE_SUBNET_IDS="subnet-xxxxx,subnet-yyyyy"
 export FALCON_CLIENT_ID="your-client-id"
 export FALCON_CLIENT_SECRET="your-client-secret"
 export FALCON_CLOUD="us-1"                       # us-1, us-2, eu-1, us-gov-1, us-gov-2
@@ -34,10 +33,27 @@ export FALCON_CLOUD="us-1"                       # us-1, us-2, eu-1, us-gov-1, u
 ### 2. Set Optional Configuration Variables
 
 ```bash
+# Deployment scope
+export SCOPE="local account"                     # "local account" or "organization"
+
+# Organization deployment (required if SCOPE=organization)
+export ORGANIZATION_ID="o-xxxxxxxxxx"            # AWS Organization ID
+export REGIONS="us-west-2,us-east-1"            # Comma-separated list of regions
+export OUS="r-xxxx,ou-xxxx-xxxxxxxx"            # Organization Units
+
+# Network configuration
+export VPC_CIDR="10.0.0.0/22"                   # VPC CIDR block (default: 10.0.0.0/22)
+
+# Falcon component deployment flags
 export DEPLOY_FALCON_ADMISSION="true"            # Deploy Falcon Kubernetes Admission Controller
 export DEPLOY_FALCON_IMAGE_ANALYZER="false"      # Deploy Falcon Image Analyzer
 export DEPLOY_FALCON_NODE_SENSOR="auto"          # auto, true, false
 export DEPLOY_FALCON_CONTAINER="auto"            # auto, true, false
+
+# Resource naming
+export RESOURCE_PREFIX="crowdstrike-eks-protection"
+export RESOURCE_SUFFIX=""
+export PERMISSIONS_BOUNDARY=""                   # IAM permissions boundary (optional)
 export STACK_NAME="crowdstrike-falcon-eks-protection"
 ```
 
@@ -57,29 +73,32 @@ export STACK_NAME="crowdstrike-falcon-eks-protection"
 
 ```
 eks-protection/
-├── cloudformation.yaml                 # Complete CloudFormation template
-├── check_and_install.sh               # Main installation script (pulled from GitHub)
-├── ecs-task-definition.json           # ECS task definition reference
-├── deploy.sh                          # Deployment script
+├── cloudformation.yaml                # Complete CloudFormation template
+├── deploy.sh                          # CloudFormation deployment script
+├── event_handler.sh                   # Retrieves event data and configures ECS Task environment
+├── setup_cluster.py                   # Updates cluster access and network config to ensure secure communication
+├── deploy_operator.sh                 # Deploys Falcon Operator and Deployment components
 └── README.md                          # This documentation
 ```
 
 ## 🔧 How It Works
 
-### 1. Container Image
-- Uses public `alpine/k8s:1.28.4` image with pre-installed tools:
-  - kubectl, aws-cli, helm, bash, curl, jq, eksctl
-  - No build time or ECR dependency required
+### 1. Infrastructure Setup
+- **Self-Contained**: ECS Task runs in a dedicated VPC, subnets, NAT Gateway, and security groups
+- **Container Image**: Uses public `alpine/k8s:1.28.4` image 
+  - pre-installed tools: kubectl, aws-cli, helm, bash, curl, jq, eksctl
+  - pulls latest scripts from GitHub at runtime
 
-### 2. Script Management
-- **Main Script**: `check_and_install.sh` is pulled directly from GitHub at runtime
-- **Event Handler**: Small orchestration script stored in AWS Parameter Store
-- **Falcon Deployment**: YAML manifest template with dynamic parameter substitution stored in AWS Parameter Store
+### 2. Script Details
+- **Event Handler**: Retrieves event data and configures ECS Task environment with required variables such as Cluster name, AWS Account ID, AWS Region
+- **Setup Script**: Adds the ECS Task ARN to the EKS Cluster Access entries and the ECS Task VPC NAT IP address to the inbound CIDR list
+- **Deploy Script**: Determines sensor type and apply Falcon Operator and Falcon Deployment Components using kubectl
+- **Falcon Deployment**: YAML manifest template with dynamic parameter substitution stored in Parameter Store
 
-### 3. Event-Driven Architecture
+### 3. Enhanced Event-Driven Architecture
 - **EventBridge Rule**: Triggers when EKS clusters are created
-- **ECS Fargate Task**: Executes the installation automatically
-- **Cluster Detection**: Auto-detects Fargate vs. Node-based clusters
+- **Centralized Custom EventBus**: EventBridge Rules across the AWS Organization target this to allow for a single, centralized ECS Cluster.
+- **ECS Fargate Task**: Invoked via EventBridge rule
 
 ### 4. Intelligent Sensor Deployment
 - **Auto Mode**: Automatically selects appropriate sensors based on cluster type
@@ -88,15 +107,25 @@ eks-protection/
   - Hybrid clusters → FalconNodeSensor (preferred)
 - **Manual Override**: Explicit control via environment variables
 
-## 📊 Architecture Flow
+## 📊 Event-Driven Architecture
 
 ```
-EKS Cluster Creation → EventBridge → ECS Fargate Task → Script Download → Falcon Installation
-                                         ↓                      ↓
-                           alpine/k8s:1.28.4 (public)    GitHub Repository
-                                         ↓                      ↓
-                              Secrets Manager           check_and_install.sh
-                               (API credentials)        (latest version)
+EKS Cluster Creation → EventBridge → Centralized EventBus → ECS Fargate Task
+                           ↓                                     ↓
+                     Get cluster name,                      alpine/k8s:1.28.4
+                     region, account Id                     (in private VPC)
+                                                                 ↓
+                                                            Secrets Manager
+                                                            (Falcon API credentials)
+                                                                 ↓
+                                                            GitHub Repository
+                                                            (curl latest scripts)
+                                                                 ↓
+                                                            Parameter Store
+                                                            (Falcon Deployment manifest)
+                                                                 ↓
+                                                            Apply Falcon Operator Deployment
+                                                            (with auto-detection)
 ```
 
 ## 🎯 Configuration Options
@@ -124,54 +153,49 @@ EKS Cluster Creation → EventBridge → ECS Fargate Task → Script Download �
 - **IAM Roles**: Separate execution and task roles with minimal permissions
 - **Secrets Manager**: API credentials stored securely, never in logs
 - **VPC Deployment**: ECS tasks run in private subnets
-- **No Public IPs**: All communication through VPC endpoints or NAT
+- **No Public IP/Ingress on Tasks**: All communication through NAT
 - **Script Integrity**: Scripts pulled from trusted GitHub repository
-
-## 📋 CloudFormation Template Features
-
-The `cloudformation.yaml` template includes:
-
-- ✅ **ECS Infrastructure**: Cluster, task definition, security groups
-- ✅ **IAM Security**: Execution and task roles with least privilege
-- ✅ **Event Integration**: EventBridge rule for automatic triggering  
-- ✅ **Secret Management**: Secure API credential storage
-- ✅ **Parameter Store**: Configuration and script URL management
-- ✅ **CloudWatch Logging**: Complete execution visibility
-- ✅ **GitHub Integration**: Dynamic script downloading
 
 ## 🚀 Deployment
 
 ### CloudFormation Deployment (Recommended)
 
 ```bash
-# Using the deployment script
+# Using the deployment script (recommended)
 ./deploy.sh cloudformation
 
-# Or directly with AWS CLI
+# Or directly with AWS CLI - Local Account Deployment
 aws cloudformation deploy \
   --template-file cloudformation.yaml \
   --stack-name crowdstrike-falcon-eks-protection \
   --parameter-overrides \
-    VpcId=vpc-xxxxxxxx \
-    PrivateSubnetIds="subnet-xxxxx\\,subnet-yyyyy" \
+    Scope="local account" \
     FalconClientId=your-client-id \
     FalconClientSecret=your-client-secret \
     FalconCloud=us-1 \
+    VpcCidr=10.0.0.0/22 \
     DeployFalconAdmission=true \
     DeployFalconImageAnalyzer=false \
     DeployFalconNodeSensor=auto \
     DeployFalconContainer=auto \
+    ResourcePrefix=crowdstrike-eks-protection \
+  --capabilities CAPABILITY_NAMED_IAM
+
+# Organization-Wide Deployment
+aws cloudformation deploy \
+  --template-file cloudformation.yaml \
+  --stack-name crowdstrike-falcon-eks-protection \
+  --parameter-overrides \
+    Scope=organization \
+    OrganizationId=o-xxxxxxxxxx \
+    Regions="us-west-2,us-east-1" \
+    OUs="r-xxxx,ou-xxxx-xxxxxxxx" \
+    FalconClientId=your-client-id \
+    FalconClientSecret=your-client-secret \
+    FalconCloud=us-1 \
+    VpcCidr=10.0.0.0/22 \
   --capabilities CAPABILITY_NAMED_IAM
 ```
-
-### Parameter Validation
-
-The deployment script automatically validates:
-- ✅ AWS CLI configuration and credentials
-- ✅ Required environment variables
-- ✅ VPC and subnet accessibility  
-- ✅ CrowdStrike cloud region values
-- ✅ Boolean and enum parameter formats
 
 ## 🔍 Monitoring and Troubleshooting
 
@@ -225,19 +249,19 @@ aws events list-targets-by-rule --rule crowdstrike-falcon-eks-cluster-created
 **Symptoms**: ECS task stops immediately or fails to start
 
 **Solutions**:
-- Verify IAM execution role permissions
-- Check VPC/subnet configuration allows internet access
-- Confirm Secrets Manager access permissions
-- Validate private subnet has NAT gateway or VPC endpoints
+- Verify IAM roles haven't been modified or removed
+- Confirm Secrets Manager secret hasn't been modified or removed
+- Check CloudWatch logs for detailed error messages
+- Validate task definition resource requirements (CPU/Memory)
+- Ensure Task is launched in the correct VPC and VPC components haven't been modified or removed
 
 ### 2. Script Download Fails
 
 **Symptoms**: "Failed to download script from GitHub"
 
 **Solutions**:
-- Check internet connectivity from private subnets
-- Verify GitHub repository URL is accessible
-- Ensure curl/wget tools are available in container
+- Ensure Task is launched in the correct VPC and VPC components haven't been modified or removed
+- Verify GitHub URLs in parameter store are correct
 
 ### 3. Kubernetes Connection Issues
 
@@ -245,8 +269,7 @@ aws events list-targets-by-rule --rule crowdstrike-falcon-eks-cluster-created
 
 **Solutions**:
 - Verify EKS cluster is in ACTIVE state
-- Check task IAM role has EKS permissions
-- Ensure cluster is in same region as ECS task
+- Check EKS Cluster Access and Network config
 - Wait for cluster to be fully available
 
 ### 4. Falcon Operator Installation Fails
@@ -270,9 +293,18 @@ aws events list-targets-by-rule --rule crowdstrike-falcon-eks-cluster-created
 
 ## 🔄 Updates and Maintenance
 
+### Disabling the Solution
+If for any reason you want to disable or "pause" the event triggers for this solution you only need to disable one EventBridge rule which will effectively cut-off communication from EventBridge to the ECS Task:
+
+1. Navigate to EventBridge in the AWS Account which maintains the ECS Task
+2. Navigate to Rules
+3. Select the custom EventBus
+4. Select the rule <rule_name>
+5. Click disable
+
 ### Updating the Solution
 
-1. **Scripts**: Automatically updated from GitHub (no action required)
+1. **Scripts**: Automatically uses latest from GitHub (no action required)
 2. **CloudFormation Template**: Update and redeploy stack
 3. **Configuration**: Modify environment variables and redeploy
 
@@ -283,26 +315,79 @@ aws events list-targets-by-rule --rule crowdstrike-falcon-eks-cluster-created
 - **AWS CLI**: Latest v2 included in alpine/k8s image
 - **Falcon Operator**: Uses latest stable release
 
-### Script Updates
-
-The `check_and_install.sh` script is automatically pulled from GitHub, ensuring:
-- ✅ Latest bug fixes and improvements
-- ✅ Updated Falcon Operator compatibility
-- ✅ Enhanced cluster detection logic
-- ✅ New feature support
-
 ## 📝 Customization
 
-### Custom GitHub Repository
+### Modify Falcon Deployment Manifest
+
+To make changes to your Falcon Deployment manifest:
+
+**Note:** When making changes to the manifest, the following lines must be left unchanged to ensure the script can set the Sensor Type when detecting the cluster:
+```yaml
+          deployNodeSensor: FINAL_DEPLOY_NODE_SENSOR
+          deployContainerSensor: FINAL_DEPLOY_CONTAINER
+```
+
+1. Update the parameter value in the CloudFormation template:
+```yaml
+  FalconDeploymentParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /crowdstrike/falcon-eks-protection/falcon-deployment-manifest
+      Type: String
+      Description: CrowdStrike FalconDeployment YAML manifest
+      Value: !Sub | # Modify below
+        apiVersion: falcon.crowdstrike.com/v1alpha1
+        kind: FalconDeployment
+        metadata:
+          name: falcon-deployment
+          namespace: default
+        spec:
+          # Use Kubernetes secret for API credentials
+          falconSecret:
+            enabled: true
+            namespace: default
+            secretName: falcon-api-secret
+          
+          # Falcon API configuration
+          falcon_api:
+            cloud_region: ${FalconCloud}
+          
+          # Component deployment flags (will be updated by script based on cluster type)
+          deployNodeSensor: FINAL_DEPLOY_NODE_SENSOR  # DO NOT CHANGE
+          deployContainerSensor: FINAL_DEPLOY_CONTAINER  # DO NOT CHANGE
+          deployAdmissionController: ${DeployFalconAdmission}
+          deployImageAnalyzer: ${DeployFalconImageAnalyzer}
+```
+
+### Custom Deployment Scripts
 
 To use your own fork or repository:
 
-1. Update the `GitHubScriptParameter` value in CloudFormation template:
+1. Update the parameter values in the CloudFormation template:
 ```yaml
-GitHubScriptParameter:
-  Type: AWS::SSM::Parameter
-  Properties:
-    Value: "https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/check_and_install.sh"
+EventHandlerParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /crowdstrike/falcon-eks-protection/handler-script-url
+      Type: String
+      Description: GitHub URL for event handler script
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/event_handler.sh"
+
+  SetupScriptParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /crowdstrike/falcon-eks-protection/setup-script-url
+      Type: String
+      Description: GitHub URL for cluster setup script
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/setup_cluster.py"
+
+  DeployScriptParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /crowdstrike/falcon-eks-protection/deploy-script-url
+      Type: String
+      Description: GitHub URL for deploy operator script
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/deploy_operator.sh"
 ```
 
 2. Redeploy the CloudFormation stack
@@ -330,22 +415,6 @@ Environment:
     Value: "custom-namespace"
 ```
 
-## 🤝 Contributing
-
-To contribute improvements to this solution:
-
-1. Fork the repository
-2. Create a feature branch
-3. Test changes thoroughly
-4. Submit a pull request
-
 ## 📄 Support and License
 
-This solution is provided as-is for CrowdStrike customers and partners. For support:
 
-1. Check CloudWatch logs for execution details
-2. Review ECS task status and configuration
-3. Validate IAM permissions and network connectivity
-4. Test CrowdStrike API credentials independently
-
-For additional assistance, consult CrowdStrike documentation or support channels.

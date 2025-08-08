@@ -7,8 +7,12 @@ set -eo pipefail
 
 # Configuration
 REGION=${AWS_REGION:-"us-west-2"}
-VPC_ID=${VPC_ID:-""}
-PRIVATE_SUBNET_IDS=${PRIVATE_SUBNET_IDS:-""}
+SCOPE=${SCOPE:-"local account"}
+REGIONS=${REGIONS:-""}
+OUS=${OUS:-""}
+ORGANIZATION_ID=${ORGANIZATION_ID:-""}
+PERMISSIONS_BOUNDARY=${PERMISSIONS_BOUNDARY:-""}
+VPC_CIDR=${VPC_CIDR:-"10.0.0.0/22"}
 FALCON_CLIENT_ID=${FALCON_CLIENT_ID:-""}
 FALCON_CLIENT_SECRET=${FALCON_CLIENT_SECRET:-""}
 FALCON_CLOUD=${FALCON_CLOUD:-"us-1"}
@@ -16,6 +20,8 @@ DEPLOY_FALCON_ADMISSION=${DEPLOY_FALCON_ADMISSION:-"true"}
 DEPLOY_FALCON_IMAGE_ANALYZER=${DEPLOY_FALCON_IMAGE_ANALYZER:-"false"}
 DEPLOY_FALCON_NODE_SENSOR=${DEPLOY_FALCON_NODE_SENSOR:-"auto"}
 DEPLOY_FALCON_CONTAINER=${DEPLOY_FALCON_CONTAINER:-"auto"}
+RESOURCE_PREFIX=${RESOURCE_PREFIX:-"crowdstrike-eks-protection"}
+RESOURCE_SUFFIX=${RESOURCE_SUFFIX:-""}
 STACK_NAME=${STACK_NAME:-"crowdstrike-falcon-eks-protection"}
 
 # Colors
@@ -51,34 +57,68 @@ Features:
 ✓ Uses public alpine/k8s:1.28.4 image (includes kubectl, aws-cli, helm, etc.)
 ✓ No Docker build process required
 ✓ No ECR repository needed
-✓ Fully deployable from CloudFormation
+✓ Creates its own VPC and networking infrastructure
+✓ EventBridge InputTransformer for reliable event data passing
+✓ Structured logging and improved error handling
 ✓ Scripts stored in GitHub and AWS Parameter Store
 
 Prerequisites:
 - AWS CLI configured with appropriate credentials
-- VPC and private subnets for ECS deployment
 - CrowdStrike Falcon API credentials
 
 Required Environment Variables:
-export AWS_REGION="us-west-2"                    
-export VPC_ID="vpc-xxxxxxxx"                     
-export PRIVATE_SUBNET_IDS="subnet-xxxxx,subnet-yyyyy"
-export FALCON_CLIENT_ID="your-client-id"         
-export FALCON_CLIENT_SECRET="your-client-secret" 
+export AWS_REGION="us-west-2"                    # AWS region for deployment
+export FALCON_CLIENT_ID="your-client-id"         # CrowdStrike Falcon Client ID
+export FALCON_CLIENT_SECRET="your-client-secret" # CrowdStrike Falcon Client Secret
 export FALCON_CLOUD="us-1"                       # CrowdStrike cloud region: us-1, us-2, eu-1, us-gov-1, us-gov-2
 
 Optional Environment Variables:
+# Deployment scope (local account or organization-wide)
+export SCOPE="local account"                     # "local account" or "organization" (default: local account)
+
+# Organization deployment parameters (required if SCOPE=organization)
+export ORGANIZATION_ID="o-xxxxxxxxxx"            # AWS Organization ID
+export REGIONS="us-west-2,us-east-1"            # Comma-separated list of regions
+export OUS="r-xxxx,ou-xxxx-xxxxxxxx"            # Comma-separated list of Organization Units
+
+# Network configuration
+export VPC_CIDR="10.0.0.0/22"                   # VPC CIDR block (default: 10.0.0.0/22)
+
+# Falcon component deployment flags
 export DEPLOY_FALCON_ADMISSION="true"            # Deploy Falcon Kubernetes Admission Controller (default: true)
 export DEPLOY_FALCON_IMAGE_ANALYZER="false"      # Deploy Falcon Image Analyzer (default: false)
 export DEPLOY_FALCON_NODE_SENSOR="auto"          # Deploy Falcon Node Sensor: auto, true, false (default: auto)
 export DEPLOY_FALCON_CONTAINER="auto"            # Deploy Falcon Container Sensor: auto, true, false (default: auto)
-export STACK_NAME="crowdstrike-falcon-eks-protection"  # Optional
+
+# Resource naming
+export RESOURCE_PREFIX="crowdstrike-eks-protection"  # Resource name prefix (default: crowdstrike-eks-protection)
+export RESOURCE_SUFFIX=""                        # Resource name suffix (default: empty)
+export PERMISSIONS_BOUNDARY=""                   # IAM permissions boundary policy name (optional)
+export STACK_NAME="crowdstrike-falcon-eks-protection"  # CloudFormation stack name (optional)
 
 Usage:
-./deploy.sh [cloudformation]
+./deploy.sh [command]
+
+Commands:
+  cloudformation    Deploy the solution using CloudFormation
+  status           Check deployment status
+  help             Show this help message
 
 Examples:
-# Deploy with CloudFormation
+# Local account deployment (default)
+export FALCON_CLIENT_ID="your-client-id"
+export FALCON_CLIENT_SECRET="your-client-secret"
+export FALCON_CLOUD="us-1"
+./deploy.sh cloudformation
+
+# Organization-wide deployment
+export SCOPE="organization"
+export ORGANIZATION_ID="o-xxxxxxxxxx"
+export REGIONS="us-west-2,us-east-1,eu-west-1"
+export OUS="r-xxxx"
+export FALCON_CLIENT_ID="your-client-id"
+export FALCON_CLIENT_SECRET="your-client-secret"
+export FALCON_CLOUD="us-1"
 ./deploy.sh cloudformation
 
 # Check deployment status
@@ -107,20 +147,28 @@ validate_prerequisites() {
     fi
     
     # Check required environment variables
-    if [[ -z "$VPC_ID" ]]; then
-        log "ERROR" "VPC_ID environment variable is required"
-        exit 1
-    fi
-    
-    if [[ -z "$PRIVATE_SUBNET_IDS" ]]; then
-        log "ERROR" "PRIVATE_SUBNET_IDS environment variable is required"
-        exit 1
-    fi
-    
     if [[ -z "$FALCON_CLIENT_ID" || -z "$FALCON_CLIENT_SECRET" ]]; then
         log "ERROR" "CrowdStrike API credentials are required"
         log "ERROR" "Please set FALCON_CLIENT_ID and FALCON_CLIENT_SECRET environment variables"
         exit 1
+    fi
+    
+    # If organization deployment, validate organization parameters
+    if [[ "$SCOPE" == "organization" ]]; then
+        if [[ -z "$ORGANIZATION_ID" ]]; then
+            log "ERROR" "ORGANIZATION_ID is required for organization scope deployment"
+            exit 1
+        fi
+        
+        if [[ -z "$REGIONS" ]]; then
+            log "ERROR" "REGIONS is required for organization scope deployment"
+            exit 1
+        fi
+        
+        if [[ -z "$OUS" ]]; then
+            log "ERROR" "OUS is required for organization scope deployment"
+            exit 1
+        fi
     fi
     
     # Validate FALCON_CLOUD parameter
@@ -140,25 +188,59 @@ validate_prerequisites() {
     fi
     
     # Validate deployment flags
-    local valid_bool_auto=("true" "false" "auto")
-    local valid_bool=("true" "false")
+    local valid_admission=false
+    local valid_analyzer=false
+    local valid_node=false
+    local valid_container=false
     
-    if [[ ! " ${valid_bool[@]} " =~ " ${DEPLOY_FALCON_ADMISSION} " ]]; then
+    # Check DEPLOY_FALCON_ADMISSION
+    for value in "true" "false"; do
+        if [[ "$DEPLOY_FALCON_ADMISSION" == "$value" ]]; then
+            valid_admission=true
+            break
+        fi
+    done
+    
+    if [[ "$valid_admission" != "true" ]]; then
         log "ERROR" "Invalid DEPLOY_FALCON_ADMISSION value: $DEPLOY_FALCON_ADMISSION (must be: true or false)"
         exit 1
     fi
     
-    if [[ ! " ${valid_bool[@]} " =~ " ${DEPLOY_FALCON_IMAGE_ANALYZER} " ]]; then
+    # Check DEPLOY_FALCON_IMAGE_ANALYZER  
+    for value in "true" "false"; do
+        if [[ "$DEPLOY_FALCON_IMAGE_ANALYZER" == "$value" ]]; then
+            valid_analyzer=true
+            break
+        fi
+    done
+    
+    if [[ "$valid_analyzer" != "true" ]]; then
         log "ERROR" "Invalid DEPLOY_FALCON_IMAGE_ANALYZER value: $DEPLOY_FALCON_IMAGE_ANALYZER (must be: true or false)"
         exit 1
     fi
     
-    if [[ ! " ${valid_bool_auto[@]} " =~ " ${DEPLOY_FALCON_NODE_SENSOR} " ]]; then
+    # Check DEPLOY_FALCON_NODE_SENSOR
+    for value in "true" "false" "auto"; do
+        if [[ "$DEPLOY_FALCON_NODE_SENSOR" == "$value" ]]; then
+            valid_node=true
+            break
+        fi
+    done
+    
+    if [[ "$valid_node" != "true" ]]; then
         log "ERROR" "Invalid DEPLOY_FALCON_NODE_SENSOR value: $DEPLOY_FALCON_NODE_SENSOR (must be: auto, true, or false)"
         exit 1
     fi
     
-    if [[ ! " ${valid_bool_auto[@]} " =~ " ${DEPLOY_FALCON_CONTAINER} " ]]; then
+    # Check DEPLOY_FALCON_CONTAINER
+    for value in "true" "false" "auto"; do
+        if [[ "$DEPLOY_FALCON_CONTAINER" == "$value" ]]; then
+            valid_container=true
+            break
+        fi
+    done
+    
+    if [[ "$valid_container" != "true" ]]; then
         log "ERROR" "Invalid DEPLOY_FALCON_CONTAINER value: $DEPLOY_FALCON_CONTAINER (must be: auto, true, or false)"
         exit 1
     fi
@@ -170,22 +252,37 @@ validate_prerequisites() {
 deploy_cloudformation() {
     log "INFO" "Deploying with CloudFormation..."
     
-    # Convert comma-separated subnet IDs to CloudFormation parameter format
-    local subnet_params=$(echo "$PRIVATE_SUBNET_IDS" | sed 's/,/\\,/g')
+    # Build parameter overrides dynamically
+    local param_overrides=(
+        "Scope=$SCOPE"
+        "FalconClientId=$FALCON_CLIENT_ID"
+        "FalconClientSecret=$FALCON_CLIENT_SECRET"
+        "FalconCloud=$FALCON_CLOUD"
+        "DeployFalconAdmission=$DEPLOY_FALCON_ADMISSION"
+        "DeployFalconImageAnalyzer=$DEPLOY_FALCON_IMAGE_ANALYZER"
+        "DeployFalconNodeSensor=$DEPLOY_FALCON_NODE_SENSOR"
+        "DeployFalconContainer=$DEPLOY_FALCON_CONTAINER"
+        "VpcCidr=$VPC_CIDR"
+        "ResourcePrefix=$RESOURCE_PREFIX"
+        "ResourceSuffix=$RESOURCE_SUFFIX"
+    )
+    
+    # Add organization-specific parameters if needed
+    if [[ "$SCOPE" == "organization" ]]; then
+        param_overrides+=("Regions=$REGIONS")
+        param_overrides+=("OUs=$OUS")
+        param_overrides+=("OrganizationId=$ORGANIZATION_ID")
+    fi
+    
+    # Add permissions boundary if specified
+    if [[ -n "$PERMISSIONS_BOUNDARY" ]]; then
+        param_overrides+=("PermissionsBoundary=$PERMISSIONS_BOUNDARY")
+    fi
     
     aws cloudformation deploy \
         --template-file cloudformation.yaml \
         --stack-name "$STACK_NAME" \
-        --parameter-overrides \
-            "VpcId=$VPC_ID" \
-            "PrivateSubnetIds=$subnet_params" \
-            "FalconClientId=$FALCON_CLIENT_ID" \
-            "FalconClientSecret=$FALCON_CLIENT_SECRET" \
-            "FalconCloud=$FALCON_CLOUD" \
-            "DeployFalconAdmission=$DEPLOY_FALCON_ADMISSION" \
-            "DeployFalconImageAnalyzer=$DEPLOY_FALCON_IMAGE_ANALYZER" \
-            "DeployFalconNodeSensor=$DEPLOY_FALCON_NODE_SENSOR" \
-            "DeployFalconContainer=$DEPLOY_FALCON_CONTAINER" \
+        --parameter-overrides "${param_overrides[@]}" \
         --capabilities CAPABILITY_NAMED_IAM \
         --region "$REGION"
     
