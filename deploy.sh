@@ -279,14 +279,12 @@ deploy_cloudformation() {
         param_overrides+=("PermissionsBoundary=$PERMISSIONS_BOUNDARY")
     fi
     
-    aws cloudformation deploy \
+    if aws cloudformation deploy \
         --template-file cloudformation.yaml \
         --stack-name "$STACK_NAME" \
         --parameter-overrides "${param_overrides[@]}" \
         --capabilities CAPABILITY_NAMED_IAM \
-        --region "$REGION"
-    
-    if [ $? -eq 0 ]; then
+        --region "$REGION"; then
         log "SUCCESS" "CloudFormation deployment completed successfully"
         show_deployment_info "cloudformation"
     else
