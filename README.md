@@ -81,7 +81,11 @@ eks-protection/
 └── README.md                          # This documentation
 ```
 
-## 🔧 How It Works
+## 🔧 Manually Deploy to Existing Clusters
+This solution does not require you wait for an event to deploy Falcon to existing clusters.  
+Please see [EXISTING_CLUSTER_README.md](EXISTING_CLUSTER_README.md) for details.
+
+## ⚙️ How It Works
 
 ### 1. Infrastructure Setup
 - **Self-Contained**: ECS Task runs in a dedicated VPC, subnets, NAT Gateway, and security groups
