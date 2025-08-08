@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'CrowdStrike Falcon EKS Protection using alpine/k8s pre-built image'
+Description: 'CrowdStrike Falcon EKS Protection'
 
 Metadata:
   AWS::CloudFormation::Interface:
@@ -279,32 +279,43 @@ Resources:
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DeployScriptParameter}'
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${EventHandlerParameter}'
                   - !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${FalconDeploymentParameter}'
-        - PolicyName: EKSFullAccess
+        - PolicyName: TaskExecution
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
-                  - eks:*
+                  - eks:DescribeCluster
+                  - eks:ListClusters
+                  - eks:ListFargateProfiles
+                  - eks:UpdateClusterConfig
+                  - eks:DescribeUpdate
+                  - eks:AssociateAccessPolicy
                   - ec2:DescribeSubnets
                   - ec2:DescribeVpcs
+                  - ec2:DescribeRegions
                   - iam:CreateRole
                   - iam:AttachRolePolicy
                   - iam:GetRole
                   - iam:PassRole
-                  - iam:ListOpenIDConnectProviders
                 Resource: "*"
-        - PolicyName: KubernetesAccess
+              - Effect: Allow
+                Action:
+                  - eks:UpdateAccessEntry
+                  - eks:CreateAccessEntry
+                  - eks:DeleteAccessEntry
+                  - eks:DescribeAccessEntry
+                Resource: 
+                  - !Sub 'arn:${AWS::Partition}:eks:*:${AWS::AccountId}:cluster/*'
+                  - !Sub 'arn:${AWS::Partition}:eks:*:${AWS::AccountId}:access-entry/*/${ResourcePrefix}-task-role${ResourceSuffix}/${AWS::AccountId}/$/*'
+        - PolicyName: AssumeRole
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
               - Effect: Allow
                 Action:
                   - sts:AssumeRole
-                Resource: "*"
-                Condition:
-                  StringEquals:
-                    aws:RequestedRegion: !Ref AWS::Region
+                Resource: !Sub 'arn:${AWS::Partition}:iam::*:role/${ResourcePrefix}-execution-role${ResourceSuffix}'
 
   # ECS Task Definition
   ECSTaskDefinition:
@@ -324,7 +335,7 @@ Resources:
           EntryPoint: ["/bin/sh"]
           Command:
             - "-c"
-            - "HANDLER_URL=$(aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/event_handler.sh $HANDLER_URL && SETUP_URL=$(aws ssm get-parameter --name $SETUP_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/setup_cluster.py $SETUP_URL && DEPLOY_URL=$(aws ssm get-parameter --name $DEPLOY_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/deploy.sh $DEPLOY_URL && chmod +x /app/*.sh && chmod +x /app/*.py && mkdir -p /root/.kube /app && apk add --no-cache --quiet python3 py3-pip && pip3 install -qqq boto3 botocore && /app/event_handler.sh" 
+            - "HANDLER_URL=$(aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/event_handler.sh $HANDLER_URL && SETUP_URL=$(aws ssm get-parameter --name $SETUP_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/setup_cluster.py $SETUP_URL && DEPLOY_URL=$(aws ssm get-parameter --name $DEPLOY_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/deploy_operator.sh $DEPLOY_URL && chmod +x /app/*.sh && chmod +x /app/*.py && mkdir -p /root/.kube /app && apk add --no-cache --quiet python3 py3-pip && pip3 install -qqq boto3 botocore && /app/event_handler.sh" 
           WorkingDirectory: "/app"
           LogConfiguration:
             LogDriver: awslogs
