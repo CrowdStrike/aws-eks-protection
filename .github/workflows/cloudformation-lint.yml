@@ -34,8 +34,8 @@ jobs:
         
     - name: Lint CloudFormation templates
       run: |
-        # Find and lint CloudFormation files
-        find . -name "*.yaml" -o -name "*.yml" -o -name "*.json" | while read file; do
+        # Find and lint CloudFormation files (excluding .github directory)
+        find . -not -path "./.github/*" \( -name "*.yaml" -o -name "*.yml" -o -name "*.json" \) | while read file; do
           echo "Linting $file"
           cfn-lint --ignore-checks W1030 "$file" || exit 1
         done
