@@ -223,3 +223,6 @@ logs/
 # Temporary files
 tmp/
 temp/
+
+# Config files
+*.json

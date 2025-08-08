@@ -417,4 +417,12 @@ Environment:
 
 ## 📄 Support and License
 
+## License
 
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+### Support
+
+This is a community-driven, open source project. While it is not an official CrowdStroke product, it is actively maintained by CrowdStrike and supported in collaboration with the open source developer community.
+
+For more information, please see our [SUPPORT](SUPPORT.md) file.
