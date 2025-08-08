@@ -284,7 +284,7 @@ create_falcon_secret() {
     if [[ -n "$FALCON_CID" ]]; then
         # Add CID if provided
         kubectl patch secret falcon-api-secret -n default \
-            --patch='{"data":{"falcon-cid":"'$(echo -n "$FALCON_CID" | base64)'"}}'
+            --patch='{"data":{"falcon-cid":"'"$(echo -n "$FALCON_CID" | base64)"'"}}'
     fi
     
     if [ $? -eq 0 ]; then

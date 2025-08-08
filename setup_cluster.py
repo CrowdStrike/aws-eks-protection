@@ -1,8 +1,9 @@
+"""Setup EKS Cluster access for CrowdStrike EKS Protection"""
 import os
 import time
+import logging
 import boto3
 import botocore
-import logging
 
 # Configure logging
 logging.basicConfig(
@@ -21,43 +22,46 @@ NAT_IP = os.environ['NAT_IP']
 TASK_ARN = os.environ['TASK_ARN']
 PARTITION = os.environ['PARTITION']
 
-def check_cluster(eks):
-    cluster_details = eks.describe_cluster(
+
+def check_cluster(eks_client):
+    """Get Cluster Details and Status"""
+    cluster_details = eks_client.describe_cluster(
         name=EKS_CLUSTER_NAME
     )
-    public_access_cidrs = cluster_details.get('cluster', {}).get('resourcesVpcConfig', {}).get('publicAccessCidrs')
+    current_cidrs = cluster_details.get('cluster', {}).get('resourcesVpcConfig', {}).get('publicAccessCidrs')
     while 'ACTIVE' not in cluster_details.get('cluster', {}).get('status'):
         time.sleep(60)
-        cluster_details = eks.describe_cluster(
+        cluster_details = eks_client.describe_cluster(
             name=EKS_CLUSTER_NAME
         )
-    else:
-        logger.info(f'Cluster {EKS_CLUSTER_NAME} is now active')
-        return public_access_cidrs
-    
-def setup_cluster(eks, public_access_cidrs):
+    logger.info('Cluster %s is now active', EKS_CLUSTER_NAME)
+    return current_cidrs
+
+
+def setup_cluster(eks_client, cidrs_list):
+    """Add Access entries and IP COnfig to EKS Cluster"""
     if SCOPE == 'organization':
         arn = f'arn:{PARTITION}:iam::{ACCOUNT_ID}:role/{SWITCH_ROLE}'
     else:
         arn = TASK_ARN
     try:
-        logger.info(f'Adding access entry for {EKS_CLUSTER_NAME}')
-        eks.create_access_entry(
+        logger.info('Adding access entry for %s', EKS_CLUSTER_NAME)
+        eks_client.create_access_entry(
             clusterName=EKS_CLUSTER_NAME,
             principalArn=arn,
             username='crowdstrike-eks-protection',
             type='STANDARD'
         )
-    
+
     except botocore.exceptions.ClientError as error:
         if error.response['Error']['Code'] == "ResourceInUseException":
-            logger.warning(f'Skipping Access Entry for {EKS_CLUSTER_NAME}: {arn} already exists')
+            logger.warning('Skipping Access Entry for %s: %s already exists', EKS_CLUSTER_NAME, arn)
         else:
             logger.error(error)
     try:
-        logger.info(f'Adding access policy for {EKS_CLUSTER_NAME}')
+        logger.info('Adding access policy for %s', EKS_CLUSTER_NAME)
         access_policy = f'arn:{PARTITION}:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy'
-        eks.associate_access_policy(
+        eks_client.associate_access_policy(
             clusterName=EKS_CLUSTER_NAME,
             principalArn=arn,
             policyArn=access_policy,
@@ -68,35 +72,35 @@ def setup_cluster(eks, public_access_cidrs):
     except botocore.exceptions.ClientError as error:
         logger.error(error)
     # Check if cluster already allows access from anywhere
-    if '0.0.0.0/0' in public_access_cidrs:
-        logger.info(f'Cluster {EKS_CLUSTER_NAME} already allows access from 0.0.0.0/0, skipping NAT IP update')
+    if '0.0.0.0/0' in cidrs_list:
+        logger.info('Cluster %s already allows access from 0.0.0.0/0, skipping NAT IP update', EKS_CLUSTER_NAME)
     else:
         try:
-            logger.info(f'Adding NAT IP for {EKS_CLUSTER_NAME}')
-            public_access_cidrs.append(f'{NAT_IP}/32')
-            response = eks.update_cluster_config(
+            logger.info('Adding NAT IP for %s', EKS_CLUSTER_NAME)
+            cidrs_list.append(f'{NAT_IP}/32')
+            response = eks_client.update_cluster_config(
                 name=EKS_CLUSTER_NAME,
                 resourcesVpcConfig={
-                    'publicAccessCidrs': public_access_cidrs
+                    'publicAccessCidrs': cidrs_list
                 }
             )
             update_id = response['update']['id']
-            update_response = eks.describe_update(
+            update_response = eks_client.describe_update(
                 name=EKS_CLUSTER_NAME,
                 updateId=update_id
             )
             while update_response['update']['status'] in 'InProgress':
                 logger.info('waiting for update to complete...')
                 time.sleep(30)
-                update_response = eks.describe_update(
+                update_response = eks_client.describe_update(
                     name=EKS_CLUSTER_NAME,
                     updateId=update_id
                 )
         except botocore.exceptions.ClientError as error:
             logger.error(error)
-    logger.info(f'Cluster: {EKS_CLUSTER_NAME} is now setup')
-    return
+    logger.info('Cluster: %s is now setup', EKS_CLUSTER_NAME)
 
-eks = boto3.client(service_name='eks',region_name=AWS_REGION)
+
+eks = boto3.client(service_name='eks', region_name=AWS_REGION)
 public_access_cidrs = check_cluster(eks)
 setup_cluster(eks, public_access_cidrs)

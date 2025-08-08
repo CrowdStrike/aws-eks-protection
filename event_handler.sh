@@ -76,9 +76,12 @@ main() {
             --role-session-name "cs-eks-protect-$(date +%s)" \
             --output json)
         
-        export AWS_ACCESS_KEY_ID=$(echo "$CREDENTIALS" | jq -r '.Credentials.AccessKeyId')
-        export AWS_SECRET_ACCESS_KEY=$(echo "$CREDENTIALS" | jq -r '.Credentials.SecretAccessKey')
-        export AWS_SESSION_TOKEN=$(echo "$CREDENTIALS" | jq -r '.Credentials.SessionToken')
+        AWS_ACCESS_KEY_ID=$(echo "$CREDENTIALS" | jq -r '.Credentials.AccessKeyId')
+        export AWS_ACCESS_KEY_ID
+        AWS_SECRET_ACCESS_KEY=$(echo "$CREDENTIALS" | jq -r '.Credentials.SecretAccessKey')
+        export AWS_SECRET_ACCESS_KEY
+        AWS_SESSION_TOKEN=$(echo "$CREDENTIALS" | jq -r '.Credentials.SessionToken')
+        export AWS_SESSION_TOKEN
         
         log "INFO" "Role assumed successfully"
     else

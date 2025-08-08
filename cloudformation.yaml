@@ -149,7 +149,7 @@ Resources:
       Name: /crowdstrike/falcon-eks-protection/handler-script-url
       Type: String
       Description: GitHub URL for event handler script
-      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/event_handler.sh"
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/main/event_handler.sh"
 
   SetupScriptParameter:
     Type: AWS::SSM::Parameter
@@ -157,7 +157,7 @@ Resources:
       Name: /crowdstrike/falcon-eks-protection/setup-script-url
       Type: String
       Description: GitHub URL for cluster setup script
-      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/setup_cluster.py"
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/main/setup_cluster.py"
 
   DeployScriptParameter:
     Type: AWS::SSM::Parameter
@@ -165,7 +165,7 @@ Resources:
       Name: /crowdstrike/falcon-eks-protection/deploy-script-url
       Type: String
       Description: GitHub URL for deploy operator script
-      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/deploy_operator.sh"
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/main/deploy_operator.sh"
 
   # Store K8s Manifest for Falcon Deployment
   FalconDeploymentParameter:
