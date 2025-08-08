@@ -337,6 +337,8 @@ create_falcon_deployment() {
     
     # Replace placeholders with actual determined values
     echo "$manifest_template" | \
+        sed "s/FINAL_DEPLOY_FALCON_ADMISSION/$DEPLOY_FALCON_ADMISSION/g" | \
+        sed "s/FINAL_DEPLOY_FALCON_IMAGE_ANALYZER/$DEPLOY_FALCON_IMAGE_ANALYZER/g" | \
         sed "s/FINAL_DEPLOY_NODE_SENSOR/$FINAL_DEPLOY_NODE_SENSOR/g" | \
         sed "s/FINAL_DEPLOY_CONTAINER/$FINAL_DEPLOY_CONTAINER/g" > "$manifest_file"
     

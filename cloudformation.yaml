@@ -194,8 +194,8 @@ Resources:
           # Component deployment flags (will be updated by script based on cluster type)
           deployNodeSensor: FINAL_DEPLOY_NODE_SENSOR
           deployContainerSensor: FINAL_DEPLOY_CONTAINER
-          deployAdmissionController: ${DeployFalconAdmission}
-          deployImageAnalyzer: ${DeployFalconImageAnalyzer}
+          deployAdmissionController: FINAL_DEPLOY_FALCON_ADMISSION
+          deployImageAnalyzer: FINAL_DEPLOY_FALCON_IMAGE_ANALYZER
 
   # ECS Cluster
   ECSCluster:
