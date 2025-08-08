@@ -325,11 +325,14 @@ If for any reason you want to disable or "pause" the event triggers for this sol
 
 To make changes to your Falcon Deployment manifest:
 
-**Note:** When making changes to the manifest, the following lines must be left unchanged to ensure the script can set the Sensor Type when detecting the cluster:
+**Note:** When making changes to the manifest, the following lines must be left unchanged to ensure the script can set these values:
 ```yaml
           deployNodeSensor: FINAL_DEPLOY_NODE_SENSOR
           deployContainerSensor: FINAL_DEPLOY_CONTAINER
+          deployAdmissionController: FINAL_DEPLOY_FALCON_ADMISSION
+          deployImageAnalyzer: FINAL_DEPLOY_FALCON_IMAGE_ANALYZER 
 ```
+These values can be modified using the environment variables on the ECS Task.
 
 1. Update the parameter value in the CloudFormation template:
 ```yaml
@@ -359,8 +362,9 @@ To make changes to your Falcon Deployment manifest:
           # Component deployment flags (will be updated by script based on cluster type)
           deployNodeSensor: FINAL_DEPLOY_NODE_SENSOR  # DO NOT CHANGE
           deployContainerSensor: FINAL_DEPLOY_CONTAINER  # DO NOT CHANGE
-          deployAdmissionController: ${DeployFalconAdmission}
-          deployImageAnalyzer: ${DeployFalconImageAnalyzer}
+          deployAdmissionController: FINAL_DEPLOY_FALCON_ADMISSION # DO NOT CHANGE
+          deployImageAnalyzer: FINAL_DEPLOY_FALCON_IMAGE_ANALYZER # DO NOT CHANGE
+
 ```
 
 ### Custom Deployment Scripts
