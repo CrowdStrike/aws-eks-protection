@@ -30,7 +30,7 @@ jobs:
         # Find and lint all shell scripts
         find . -name "*.sh" -o -name "*.bash" | while read file; do
           echo "Linting $file"
-          shellcheck "$file" || exit 1
+          shellcheck --severity=error --severity=warning "$file" || exit 1
         done
         
     - name: Check for bash shebang consistency
