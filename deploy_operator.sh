@@ -177,38 +177,6 @@ validate_falcon_credentials() {
     log "SUCCESS" "Falcon API credentials provided"
 }
 
-# Function to check and install IAM OIDC provider
-ensure_iam_oidc_provider() {
-    log "INFO" "Checking IAM OIDC provider for cluster: $EKS_CLUSTER_NAME"
-    
-    # Check if eksctl is available
-    if ! command -v eksctl &> /dev/null; then
-        log "WARNING" "eksctl not found. Please ensure IAM OIDC provider is configured manually"
-        return 0
-    fi
-    
-    # Check if OIDC provider exists
-    local cluster_oidc_url=$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.identity.oidc.issuer' --output text)
-    local oidc_id=$(echo "$cluster_oidc_url" | cut -d '/' -f 5)
-    
-    if aws iam list-open-id-connect-providers --query "OpenIDConnectProviderList[?ends_with(Arn, '$oidc_id')]" --output text | grep -q "$oidc_id"; then
-        log "SUCCESS" "IAM OIDC provider already exists"
-    else
-        log "INFO" "Installing IAM OIDC provider for cluster"
-        eksctl utils associate-iam-oidc-provider \
-            --region "$AWS_REGION" \
-            --cluster "$EKS_CLUSTER_NAME" \
-            --approve
-        
-        if [ $? -eq 0 ]; then
-            log "SUCCESS" "IAM OIDC provider installed successfully"
-        else
-            log "ERROR" "Failed to install IAM OIDC provider"
-            exit 1
-        fi
-    fi
-}
-
 # Function to check if Falcon Operator is installed
 check_falcon_operator_installed() {
     if kubectl get namespace "$FALCON_OPERATOR_NAMESPACE" &> /dev/null && \
@@ -233,9 +201,6 @@ install_falcon_operator() {
         log "SUCCESS" "Falcon Operator is already installed"
         return 0
     fi
-    
-    # Ensure IAM OIDC provider is configured
-    ensure_iam_oidc_provider
     
     # Install the operator
     local operator_url="https://github.com/crowdstrike/falcon-operator/releases/${FALCON_OPERATOR_VERSION}/download/falcon-operator.yaml"
