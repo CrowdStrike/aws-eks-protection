@@ -81,13 +81,18 @@ detect_cluster_type() {
     log "INFO" "Detecting cluster type for $EKS_CLUSTER_NAME"
     
     # Check for Fargate profiles
-    if aws eks list-fargate-profiles \
+    local fargate_profiles
+    fargate_profiles=$(aws eks list-fargate-profiles \
         --cluster-name "$EKS_CLUSTER_NAME" \
         --region "$AWS_REGION" \
-        --query 'fargateProfileNames[0]' \
-        --output text 2>/dev/null | grep -q .; then
+        --query 'fargateProfileNames' \
+        --output text 2>/dev/null)
+    
+    if [[ -n "$fargate_profiles" && "$fargate_profiles" != "None" && "$fargate_profiles" != "null" ]]; then
         IS_FARGATE="true"
-        log "INFO" "Cluster has Fargate profiles"
+        log "INFO" "Cluster has Fargate profiles: $fargate_profiles"
+    else
+        log "INFO" "No Fargate profiles detected"
     fi
 
     # Check for managed node groups
