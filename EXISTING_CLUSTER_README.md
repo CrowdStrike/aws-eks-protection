@@ -33,6 +33,16 @@ When you manually run an ECS task, it:
 - AWS CLI configured with appropriate permissions
 - Target EKS cluster must be in `ACTIVE` state
 
+### Get CloudFormation Stack Outputs
+
+CloudFormation stack outputs provide the resource Ids you need for various tasks.
+
+```bash
+# List stack outputs
+aws cloudformation describe-stacks --stack-name STACK_NAME --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' --output table
+```
+
+
 ### Manual Deployment
 
 ```bash
@@ -44,13 +54,15 @@ export TARGET_ACCOUNT_ID="123456789012"
 # Get the ECS cluster and task definition names (adjust prefix if customized)
 export ECS_CLUSTER_NAME="crowdstrike-eks-protection-cluster"
 export TASK_DEFINITION="crowdstrike-eks-protection-cluster:1"
+export SUBNET_ID="subnet-xxxxxx"
+export SECURITY_GROUP="sg-xxxxxx"
 
 # Run the ECS task
 aws ecs run-task \
   --cluster $ECS_CLUSTER_NAME \
   --task-definition $TASK_DEFINITION \
   --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-xxxxxx],securityGroups=[sg-xxxxxx],assignPublicIp=DISABLED}" \
+  --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_ID],securityGroups=[$SECURITY_GROUP],assignPublicIp=DISABLED}" \
   --overrides '{
     "containerOverrides": [
       {

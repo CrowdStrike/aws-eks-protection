@@ -134,11 +134,10 @@ EKS Cluster Creation → EventBridge → Centralized EventBus → ECS Fargate Ta
 
 ## 🎯 Configuration Options
 
-### Core Parameters
+### Core Falcon Deployment Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `FALCON_CLOUD` | `us-1` | CrowdStrike cloud region |
 | `DEPLOY_FALCON_ADMISSION` | `true` | Deploy Admission Controller |
 | `DEPLOY_FALCON_IMAGE_ANALYZER` | `false` | Deploy Image Analyzer |
 | `DEPLOY_FALCON_NODE_SENSOR` | `auto` | Deploy Node Sensor |
@@ -203,34 +202,32 @@ aws cloudformation deploy \
 
 ## 🔍 Monitoring and Troubleshooting
 
+### Get CloudFormation Stack Outputs
+
+CloudFormation stack outputs provide the resource Ids you need for various monitoring tasks.
+
+```bash
+# List stack outputs
+aws cloudformation describe-stacks --stack-name STACK_NAME --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' --output table
+```
+
 ### CloudWatch Logs
 
 Monitor execution in CloudWatch Logs:
 - **Log Group**: `/ecs/crowdstrike-falcon-eks-protection`
 - **Log Stream**: `ecs/falcon-eks-protection/{task-id}`
 
-### Key Log Messages to Monitor
-
-```bash
-# Successful execution indicators
-"Connected to Kubernetes cluster"
-"Falcon Operator installed and ready"  
-"FalconDeployment applied successfully"
-
-# Error indicators
-"Unable to connect to Kubernetes cluster"
-"Failed to install IAM OIDC provider"
-"Invalid FALCON_CLOUD value"
-```
-
 ### ECS Task Monitoring
 
 ```bash
+# Get cluster status
+aws ecs describe-clusters --clusters CLUSTER_ARN or NAME --query 'clusters[0].status' --output text
+
 # List running tasks
-aws ecs list-tasks --cluster crowdstrike-falcon-eks-protection
+aws ecs list-tasks --cluster CLUSTER_ARN or NAME
 
 # Describe specific task
-aws ecs describe-tasks --cluster crowdstrike-falcon-eks-protection --tasks TASK_ARN
+aws ecs describe-tasks --cluster CLUSTER_ARN or NAME --tasks TASK_ARN
 
 # Check task logs
 aws logs get-log-events --log-group-name /ecs/crowdstrike-falcon-eks-protection --log-stream-name STREAM_NAME
@@ -240,10 +237,10 @@ aws logs get-log-events --log-group-name /ecs/crowdstrike-falcon-eks-protection 
 
 ```bash
 # Verify rule is enabled
-aws events describe-rule --name crowdstrike-falcon-eks-cluster-created
+aws events describe-rule --name RULE_NAME
 
 # Check rule targets
-aws events list-targets-by-rule --rule crowdstrike-falcon-eks-cluster-created
+aws events list-targets-by-rule --rule RULE_NAME
 ```
 
 ## 🚨 Common Issues and Solutions
@@ -379,7 +376,7 @@ EventHandlerParameter:
       Name: /crowdstrike/falcon-eks-protection/handler-script-url
       Type: String
       Description: GitHub URL for event handler script
-      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/event_handler.sh"
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/main/event_handler.sh"
 
   SetupScriptParameter:
     Type: AWS::SSM::Parameter
@@ -387,7 +384,7 @@ EventHandlerParameter:
       Name: /crowdstrike/falcon-eks-protection/setup-script-url
       Type: String
       Description: GitHub URL for cluster setup script
-      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/setup_cluster.py"
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/main/setup_cluster.py"
 
   DeployScriptParameter:
     Type: AWS::SSM::Parameter
@@ -395,7 +392,7 @@ EventHandlerParameter:
       Name: /crowdstrike/falcon-eks-protection/deploy-script-url
       Type: String
       Description: GitHub URL for deploy operator script
-      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/rp-refactor-for-ecs/deploy_operator.sh"
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/main/deploy_operator.sh"
 ```
 
 2. Redeploy the CloudFormation stack
