@@ -100,32 +100,6 @@ You can also override these variables to customize the deployment:
 | `DEPLOY_FALCON_NODE_SENSOR` | `auto` | Deploy Node Sensor (auto/true/false) |
 | `DEPLOY_FALCON_CONTAINER` | `auto` | Deploy Container Sensor (auto/true/false) |
 
-### Advanced Example with Custom Configuration
-
-```bash
-aws ecs run-task \
-  --cluster crowdstrike-eks-protection-cluster \
-  --task-definition crowdstrike-eks-protection-cluster:1 \
-  --launch-type FARGATE \
-  --network-configuration "awsvpcConfiguration={subnets=[subnet-xxxxxx],securityGroups=[sg-xxxxxx],assignPublicIp=DISABLED}" \
-  --overrides '{
-    "containerOverrides": [
-      {
-        "name": "falcon-eks-protection",
-        "environment": [
-          {"name": "EKS_CLUSTER_NAME", "value": "production-cluster"},
-          {"name": "AWS_REGION", "value": "us-east-1"},
-          {"name": "ACCOUNT_ID", "value": "123456789012"},
-          {"name": "DEPLOY_FALCON_ADMISSION", "value": "true"},
-          {"name": "DEPLOY_FALCON_IMAGE_ANALYZER", "value": "true"},
-          {"name": "DEPLOY_FALCON_NODE_SENSOR", "value": "true"},
-          {"name": "DEPLOY_FALCON_CONTAINER", "value": "false"}
-        ]
-      }
-    ]
-  }'
-```
-
 ## 📊 Monitoring Task Execution
 
 ### 1. Check Task Status
