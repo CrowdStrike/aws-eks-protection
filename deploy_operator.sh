@@ -319,24 +319,11 @@ create_falcon_deployment() {
         exit 1
     fi
     
-    # Retrieve the manifest template from Parameter Store
-    local manifest_template
-    manifest_template=$(aws ssm get-parameter \
-        --name "$FALCON_DEPLOYMENT_PARAMETER" \
-        --region "$AWS_REGION" \
-        --query 'Parameter.Value' \
-        --output text)
-    
-    if [ $? -ne 0 ]; then
-        log "ERROR" "Failed to retrieve FalconDeployment manifest from Parameter Store"
-        exit 1
-    fi
-    
     # Create temporary manifest file
     manifest_file="/tmp/falcon-deployment-$(date +%s).yaml"
     
     # Replace placeholders with actual determined values
-    echo "$manifest_template" | \
+    echo "$MANIFEST_TEMPLATE" | \
         sed "s/FINAL_DEPLOY_FALCON_ADMISSION/$DEPLOY_FALCON_ADMISSION/g" | \
         sed "s/FINAL_DEPLOY_FALCON_IMAGE_ANALYZER/$DEPLOY_FALCON_IMAGE_ANALYZER/g" | \
         sed "s/FINAL_DEPLOY_NODE_SENSOR/$FINAL_DEPLOY_NODE_SENSOR/g" | \

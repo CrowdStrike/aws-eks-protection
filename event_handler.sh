@@ -66,6 +66,14 @@ main() {
     # Setup config
     setup_configuration
     
+    # Retrieve the manifest template from Parameter Store
+    MANIFEST_TEMPLATE=$(aws ssm get-parameter \
+        --name "$FALCON_DEPLOYMENT_PARAMETER" \
+        --region "$AWS_REGION" \
+        --query 'Parameter.Value' \
+        --output text)
+    export MANIFEST_TEMPLATE
+
     # assume role
     if [ ! "$SCOPE" = "local account" ]; then
         log "INFO" "Assuming role: $SWITCH_ROLE"
