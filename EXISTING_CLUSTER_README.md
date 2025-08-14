@@ -77,7 +77,7 @@ aws ecs run-task \
   }'
 ```
 
-## 🔧 Detailed Configuration
+## 🔧 Configuration Details
 
 ### Required Environment Variables
 
