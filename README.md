@@ -1,102 +1,120 @@
-![](https://raw.githubusercontent.com/CrowdStrike/falconpy/main/docs/asset/cs-logo.png)
+# CrowdStrike Falcon EKS Protection
 
-## CrowdStrike EKS Protection
+An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and ImageAnalyzer to EKS clusters across your AWS Organization using event-driven architecture.
 
-This repository provides CloudFormation templates to automatically deploy the Falcon Sensor against EKS Clusters across an AWS Organization.
+## Usage Guides
 
-## Prerequisites
+| Guide | Description |
+|-------|-------------|
+| [Deployment Guide](DEPLOYMENT_GUIDE_README.md) | Complete setup instructions, prerequisites, and deployment options for new installations |
+| [Existing Cluster Guide](EXISTING_CLUSTER_README.md) | Manual deployment instructions for protecting existing EKS clusters |
+| [Customization Guide](CUSTOMIZATIONS_README.md) | Advanced configuration options for modifying Falcon deployment manifests and scripts |
 
-### Create Falcon API Client and Secret
 
-1. In CrowdStrike Console, Navigate to API Clients and Keys page.
-2. Click on "Add new API client".
-3. Within the "Add new API client" modal, create a new client name and enable following scopes:
+## ✨ Features
 
--
+- 🚀 **Event-Driven Automation**: Automatically installs Falcon components when EKS clusters are created
+- 🐳 **No Build Dependencies**: Uses public `alpine/k8s:1.28.4` container image
+- 🎯 **Intelligent Sensor Selection**: Auto-detects cluster type and deploys appropriate sensors
+- 🔒 **Secure**: API credentials stored in AWS Secrets Manager
+- 📊 **Observable**: Complete CloudWatch logging with structured output
+- 🌐 **Self-Contained Infrastructure**: Creates own VPC and networking
+- 🏢 **Organization Support**: Deploy across AWS Organizations or single accounts
 
-4. Add new API Client
-5. Save the CLIENT ID and SECRET displayed for your records. The SECRET will not be visible after this step.
+## 📁 File Structure
 
-## Single Account Setup
+```
+eks-protection/
+├── cloudformation.yaml                # Complete CloudFormation template
+├── deploy.sh                          # CloudFormation deployment script
+├── event_handler.sh                   # Retrieves event data and configures ECS Task environment
+├── setup_cluster.py                   # Updates cluster access and network config to ensure secure communication
+├── deploy_operator.sh                 # Deploys Falcon Operator and Deployment components
+└── README.md                          # This documentation
+```
 
-1. Download the contents of this repository.
-2. Log in to your AWS Account
-3. In Secrets Manager, create a new secret called `/CrowdStrike/Falcon/Credentials` and add the following entries with their respective values.
+## ⚙️ How It Works
 
-- falcon_cloud (one of: us-1, us-2, eu-1, us-gov-1)
-- falcon_client_id
-- falcon_client_secret
-- falcon_cid (falcon cid with 2 character hash)
-- falcon_docker_api_token
+### 1. Infrastructure Setup
+- **Self-Contained**: ECS Task runs in a dedicated VPC, subnets, NAT Gateway, and security groups
+- **Container Image**: Uses public `alpine/k8s:1.28.4` image 
+  - pre-installed tools: kubectl, aws-cli, helm, bash, curl, jq, eksctl
+  - pulls latest scripts from GitHub at runtime
 
-4. Upload the following files to the root of an S3 Bucket.
+### 2. Script Details
+- **Event Handler**: Retrieves event data and configures ECS Task environment with required variables such as Cluster name, AWS Account ID, AWS Region
+- **Setup Script**: Adds the ECS Task ARN to the EKS Cluster Access entries and the ECS Task VPC NAT IP address to the inbound CIDR list
+- **Deploy Script**: Determines sensor type and apply Falcon Operator and Falcon Deployment Components using kubectl
+- **Falcon Deployment**: YAML manifest template with dynamic parameter substitution stored in Parameter Store
 
-- existing_clusters_lambda_function.zip
-- new_clusters_lambda_function.zip
-- eks_build.zip
-- eks-eventbridge-stackset.yml
-- eks-protection-stack.yml
-- eks-target-roles-stackset.yml
+### 3. Enhanced Event-Driven Architecture
+- **EventBridge Rule**: Triggers when EKS clusters are created
+- **Centralized Custom EventBus**: EventBridge Rules across the AWS Organization target this to allow for a single, centralized ECS Cluster.
+- **ECS Fargate Task**: Invoked via EventBridge rule
 
-5. In the CloudFormation console select create stack.
-6. Choose Specify Template and upload init.yml
-7. Fill out the parameters, click next.
-8. Optional: change Stack Failure Options to Preserve successfully provisioned resources. This option will allow you to maintain the stack and update parameters in the event of a mistake.
-9. Enable the capabilities in the blue box and click submit.
+### 4. Intelligent Sensor Deployment
+- **Auto Mode**: Automatically selects appropriate sensors based on cluster type
+  - Fargate-only clusters → FalconContainer sensor
+  - Node-based clusters → FalconNodeSensor
+  - Hybrid clusters → FalconNodeSensor (preferred)
+- **Manual Override**: Explicit control via environment variables
 
-## Organizations Setup
+## 📊 Event-Driven Architecture
 
-1. Download the contents of this repository.
-2. Log in to the Management Account or Delegated Administrator of your AWS Organization
-3. Upload the following files to the root of an S3 Bucket.
+```
+EKS Cluster Creation → EventBridge → Centralized EventBus → ECS Fargate Task
+                           ↓                                     ↓
+                     Get cluster name,                      alpine/k8s:1.28.4
+                     region, account Id                     (in private VPC)
+                                                                 ↓
+                                                            Secrets Manager
+                                                            (Falcon API credentials)
+                                                                 ↓
+                                                            GitHub Repository
+                                                            (curl latest scripts)
+                                                                 ↓
+                                                            Parameter Store
+                                                            (Falcon Deployment manifest)
+                                                                 ↓
+                                                            Apply Falcon Operator Deployment
+                                                            (with auto-detection)
+```
 
-- existing_clusters_lambda_function.zip
-- new_clusters_lambda_function.zip
-- eks_build.zip
-- eks-eventbridge-stackset.yml
-- eks-protection-stack.yml
-- eks-target-roles-stackset.yml
+## 🎯 Configuration Options
 
-4. In the CloudFormation console select create stack.
-5. Choose Specify Template and upload init.yml
-6. Fill out the parameters, click next.
-7. Optional: change Stack Failure Options to Preserve successfully provisioned resources. This option will allow you to maintain the stack and update parameters in the event of a mistake.
-7. Enable the capabilities in the blue box and click submit.
+### Core Falcon Deployment Parameters
 
-## How it works
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `DEPLOY_FALCON_ADMISSION` | `true` | Deploy Admission Controller |
+| `DEPLOY_FALCON_IMAGE_ANALYZER` | `false` | Deploy Image Analyzer |
+| `DEPLOY_FALCON_NODE_SENSOR` | `auto` | Deploy Node Sensor |
+| `DEPLOY_FALCON_CONTAINER` | `auto` | Deploy Container Sensor |
 
-This solution automatically deploys the Falcon Sensor against your EKS Clusters using the following workflow:
+### Sensor Deployment Logic
 
-- New Cluster
+| Cluster Type | Node Sensor | Container Sensor | Logic |
+|--------------|-------------|------------------|-------|
+| Fargate-only | ❌ | ✅ | Container sensor required for Fargate |
+| Node-based | ✅ | ❌ | Node sensor preferred for EC2 instances |
+| Hybrid | ✅ | ❌ | Node sensor covers both EC2 and Fargate |
 
-1. New cluster event triggers lambda
-2. Lambda checks if cluster has EKS API authentication mode enabled
-3. If yes Lambda triggers CodeBuild
-4. CodeBuild checks for Active Status of cluster
-5. Once active, Code Build adds Access policy to allow IAM Role to manage cluster
-6. CodeBuild gets latest Falcon Images and pushes to ECR
-7. CodeBuild configures yaml files for deployment
-8. Code Build installs Sensors
+## 🔐 Security Features
 
-**Note:** The SideCar (container) sensor injection is disabled by default to prevent duplicate sensors running on hybrid (Fargate & EC2) environments.  To deploy SideCar sensor, please annotate your pods and/or namespaces to enable injection.  For more info see: <https://github.com/CrowdStrike/falcon-operator/blob/main/docs/resources/container/README.md>
+- **IAM Roles**: Separate execution and task roles with minimal permissions
+- **Secrets Manager**: API credentials stored securely, never in logs
+- **VPC Deployment**: ECS tasks run in private subnets
+- **No Public IP/Ingress on Tasks**: All communication through NAT
+- **Script Integrity**: Scripts pulled from trusted GitHub repository
 
-- Existing Clusters
+## 📄 Support and License
 
-1. Launching the CloudFormation Stack triggers lambda
-2. Lambda generates list of EKS Clusters in the environment
-3. Lambda checks if each cluster has Fargate
-4. Lambda checks if cluster has EKS API authentication mode enabled
-5. If yes Lambda triggers CodeBuild
-6. CodeBuild checks for Active Status of cluster
-7. Code Build adds Access policy to allow IAM Role to manage cluster
-8. CodeBuild gets latest Falcon Images and pushes to ECR
-9. CodeBuild configures yaml files for deployment
-10. Code Build installs Sensors
+## License
 
-## Questions or concerns?
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-If you encounter any issues or have questions about this repository, please open an [issue](https://github.com/CrowdStrike/aws-eks-protection/issues/new/choose).
+### Support
 
-## Statement of Support
+This is a community-driven, open source project. While it is not an official CrowdStroke product, it is actively maintained by CrowdStrike and supported in collaboration with the open source developer community.
 
-CrowdStrike EKS Protection is a community-driven, open source project designed to provide options for onboarding AWS with CrowdStrike Cloud Security. While not a formal CrowdStrike product, this repo is maintained by CrowdStrike and supported in partnership with the open source community.
+For more information, please see our [SUPPORT](SUPPORT.md) file.

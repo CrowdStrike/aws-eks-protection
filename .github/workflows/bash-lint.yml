@@ -1,0 +1,43 @@
+name: Bash Lint
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**.sh'
+      - '**.bash'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - '**.sh'
+      - '**.bash'
+
+jobs:
+  bash-lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install ShellCheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck
+        
+    - name: Lint bash scripts
+      run: |
+        # Find and lint all shell scripts
+        find . -name "*.sh" -o -name "*.bash" | while read file; do
+          echo "Linting $file"
+          shellcheck --severity=error --severity=warning "$file" || exit 1
+        done
+        
+    - name: Check for bash shebang consistency
+      run: |
+        # Ensure all .sh files have proper shebang
+        find . -name "*.sh" | while read file; do
+          if ! head -n 1 "$file" | grep -E '^#!/bin/(bash|sh)' > /dev/null; then
+            echo "Warning: $file may be missing a proper shebang"
+          fi
+        done
