@@ -87,17 +87,23 @@ EKS Cluster Creation → EventBridge → Centralized EventBus → ECS Fargate Ta
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `DEPLOY_FALCON_ADMISSION` | `true` | Deploy Admission Controller |
-| `DEPLOY_FALCON_IMAGE_ANALYZER` | `false` | Deploy Image Analyzer |
-| `DEPLOY_FALCON_NODE_SENSOR` | `auto` | Deploy Node Sensor |
-| `DEPLOY_FALCON_CONTAINER` | `auto` | Deploy Container Sensor |
+| `DEPLOY_FALCON_IMAGE_ANALYZER` | `true` | Deploy Image Analyzer |
+| `DEPLOY_FALCON_NODE_SENSOR` | `true` | Deploy Node Sensor (EC2) |
+| `DEPLOY_FALCON_CONTAINER` | `true` | Deploy Container Sensor (Fargate) |
 
-### Sensor Deployment Logic
+### Fargate Compatability
 
-| Cluster Type | Node Sensor | Container Sensor | Logic |
-|--------------|-------------|------------------|-------|
-| Fargate-only | ❌ | ✅ | Container sensor required for Fargate |
-| Node-based | ✅ | ❌ | Node sensor preferred for EC2 instances |
-| Hybrid | ✅ | ❌ | Node sensor covers both EC2 and Fargate |
+If using Fargate or plan to add Fargate to your clusters in the future,  
+please ensure `DEPLOY_FALCON_CONTAINER = true`
+
+**Injection Behavior**
+- Container sensor injection disabled by default
+- `falcon-sidecar-injector` pods will run but only inject the container sensor if Fargate pods are labeled.
+- This prevents duplicative sensors when running hybrid clusters (EC2 and Fargate) and allows you to set both `DEPLOY_FALCON_NODE_SENSOR = true` and `DEPLOY_FALCON_CONTAINER = true`
+
+**Use the following label to inject Falcon Container**  
+ `falcon.crowdstrike.com/inject: "true"`
+
 
 ## 🔐 Security Features
 

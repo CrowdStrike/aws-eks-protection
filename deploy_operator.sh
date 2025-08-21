@@ -1,14 +1,9 @@
 #!/bin/bash
 
-# Configuration variables with defaults
-NAMESPACE=${NAMESPACE:-"default"}
-POD_NAME=${POD_NAME:-"my-application"}
-DEPLOYMENT_NAME=${DEPLOYMENT_NAME:-"my-application"}
-DEPLOYMENT_YAML=${DEPLOYMENT_YAML:-""}
+# Configuration variables
 TIMEOUT=${TIMEOUT:-300}
-AWS_REGION=${AWS_REGION:-"us-west-2"}
+AWS_REGION=${AWS_REGION:-""}
 EKS_CLUSTER_NAME=${EKS_CLUSTER_NAME:-""}
-KUBECTL_CONTEXT=${KUBECTL_CONTEXT:-""}
 
 # CrowdStrike Falcon Operator configuration
 FALCON_OPERATOR_NAMESPACE=${FALCON_OPERATOR_NAMESPACE:-"falcon-operator"}
@@ -22,18 +17,12 @@ FALCON_OPERATOR_VERSION=${FALCON_OPERATOR_VERSION:-"latest"}
 
 # FalconDeployment component configuration
 DEPLOY_FALCON_ADMISSION=${DEPLOY_FALCON_ADMISSION:-"true"}
-DEPLOY_FALCON_IMAGE_ANALYZER=${DEPLOY_FALCON_IMAGE_ANALYZER:-"false"}
-DEPLOY_FALCON_NODE_SENSOR=${DEPLOY_FALCON_NODE_SENSOR:-"auto"}    # auto, true, false
-DEPLOY_FALCON_CONTAINER=${DEPLOY_FALCON_CONTAINER:-"auto"}        # auto, true, false
+DEPLOY_FALCON_IMAGE_ANALYZER=${DEPLOY_FALCON_IMAGE_ANALYZER:-"true"}
+DEPLOY_FALCON_NODE_SENSOR=${DEPLOY_FALCON_NODE_SENSOR:-"true"}
+DEPLOY_FALCON_CONTAINER=${DEPLOY_FALCON_CONTAINER:-"true"}
 
-# Fargate-specific variables
-FARGATE_PROFILE_NAME=${FARGATE_PROFILE_NAME:-""}
-FARGATE_POD_EXECUTION_ROLE_ARN=${FARGATE_POD_EXECUTION_ROLE_ARN:-""}
-FARGATE_SUBNETS=${FARGATE_SUBNETS:-""}
-
-# Cluster type detection variables
-IS_FARGATE="false"
-HAS_MANAGED_NODES="false"
+# Parameter Store configuration
+FALCON_DEPLOYMENT_PARAMETER=${FALCON_DEPLOYMENT_PARAMETER:-"/crowdstrike/falcon-eks-protection/falcon-deployment-manifest"}
 
 # Color codes for output
 RED='\033[0;31m'
@@ -75,55 +64,6 @@ cleanup() {
 # Set error handling after functions are defined
 set -eo pipefail
 trap 'handle_error $? $LINENO' ERR
-
-# Function to detect cluster type
-detect_cluster_type() {
-    log "INFO" "Detecting cluster type for $EKS_CLUSTER_NAME"
-    
-    # Check for Fargate profiles
-    local fargate_profiles
-    fargate_profiles=$(aws eks list-fargate-profiles \
-        --cluster-name "$EKS_CLUSTER_NAME" \
-        --region "$AWS_REGION" \
-        --query 'fargateProfileNames' \
-        --output text 2>/dev/null)
-    
-    if [[ -n "$fargate_profiles" && "$fargate_profiles" != "None" && "$fargate_profiles" != "null" ]]; then
-        IS_FARGATE="true"
-        log "INFO" "Cluster has Fargate profiles: $fargate_profiles"
-    else
-        log "INFO" "No Fargate profiles detected"
-    fi
-
-    # Check for managed node groups
-    if aws eks list-nodegroups \
-        --cluster-name "$EKS_CLUSTER_NAME" \
-        --region "$AWS_REGION" \
-        --query 'nodegroups[0]' \
-        --output text 2>/dev/null | grep -q .; then
-        HAS_MANAGED_NODES="true"
-        log "INFO" "Cluster has managed node groups"
-    fi
-
-    # If neither found, check for self-managed nodes
-    if [[ "$IS_FARGATE" == "false" && "$HAS_MANAGED_NODES" == "false" ]]; then
-        if kubectl get nodes --no-headers 2>/dev/null | grep -q .; then
-            log "INFO" "Cluster has self-managed nodes"
-            HAS_MANAGED_NODES="true"
-        fi
-    fi
-
-    # Log cluster type
-    if [[ "$IS_FARGATE" == "true" ]]; then
-        if [[ "$HAS_MANAGED_NODES" == "true" ]]; then
-            log "INFO" "Detected hybrid cluster (Fargate + Node Groups)"
-        else
-            log "INFO" "Detected Fargate-only cluster"
-        fi
-    else
-        log "INFO" "Detected node-based cluster"
-    fi
-}
 
 # Function to check AWS CLI and configure EKS
 configure_eks() {
@@ -224,47 +164,6 @@ install_falcon_operator() {
     fi
 }
 
-# Function to determine sensor deployment strategy based on cluster type
-determine_sensor_strategy() {
-    local deploy_node_sensor="false"
-    local deploy_container="false"
-    
-    # Auto-determine based on cluster type if set to "auto"
-    if [[ "$DEPLOY_FALCON_NODE_SENSOR" == "auto" || "$DEPLOY_FALCON_CONTAINER" == "auto" ]]; then
-        if [[ "$IS_FARGATE" == "true" && "$HAS_MANAGED_NODES" == "false" ]]; then
-            # Fargate-only cluster - use container sensor
-            deploy_container="true"
-            deploy_node_sensor="false"
-            log "INFO" "Fargate-only cluster detected - using FalconContainer"
-        elif [[ "$HAS_MANAGED_NODES" == "true" ]]; then
-            # Node-based or hybrid cluster - prefer node sensor
-            deploy_node_sensor="true"
-            deploy_container="false"
-            log "INFO" "Node-based cluster detected - using FalconNodeSensor"
-        else
-            log "WARNING" "Could not determine cluster type - defaulting to FalconNodeSensor"
-            deploy_node_sensor="true"
-            deploy_container="false"
-        fi
-    else
-        # Use explicit settings
-        deploy_node_sensor="$DEPLOY_FALCON_NODE_SENSOR"
-        deploy_container="$DEPLOY_FALCON_CONTAINER"
-    fi
-    
-    # Validate that both aren't enabled
-    if [[ "$deploy_node_sensor" == "true" && "$deploy_container" == "true" ]]; then
-        log "ERROR" "Cannot deploy both FalconNodeSensor and FalconContainer on the same cluster"
-        exit 1
-    fi
-    
-    # Export for use in other functions
-    export FINAL_DEPLOY_NODE_SENSOR="$deploy_node_sensor"
-    export FINAL_DEPLOY_CONTAINER="$deploy_container"
-    
-    log "INFO" "Sensor strategy: NodeSensor=$deploy_node_sensor, Container=$deploy_container"
-}
-
 # Function to create Kubernetes secret for Falcon API credentials
 create_falcon_secret() {
     log "INFO" "Creating Falcon API credentials secret"
@@ -304,30 +203,31 @@ create_falcon_deployment() {
         return 0
     fi
     
-    # Determine sensor strategy
-    determine_sensor_strategy
-    
     # Create API credentials secret
     create_falcon_secret
     
     # Get FalconDeployment Manifest from Parameter Store
-    log "INFO" "Retrieving FalconDeployment manifest from Parameter Store"
+    log "INFO" "Retrieving FalconDeployment manifest from Parameter Store: $FALCON_DEPLOYMENT_PARAMETER"
     
-    # Check if FALCON_DEPLOYMENT_PARAMETER is set
-    if [[ -z "$FALCON_DEPLOYMENT_PARAMETER" ]]; then
-        log "ERROR" "FALCON_DEPLOYMENT_PARAMETER environment variable is not set"
+    local manifest_template
+    manifest_template=$(aws ssm get-parameter \
+        --name "$FALCON_DEPLOYMENT_PARAMETER" \
+        --region "$AWS_REGION" \
+        --query 'Parameter.Value' \
+        --output text)
+    
+    if [[ -z "$manifest_template" ]]; then
+        log "ERROR" "Failed to retrieve FalconDeployment manifest from Parameter Store"
         exit 1
     fi
     
-    # Create temporary manifest file
-    manifest_file="/tmp/falcon-deployment-$(date +%s).yaml"
+    # Create temporary manifest file with substitutions
+    local manifest_file="/tmp/falcon-deployment-$(date +%s).yaml"
     
-    # Replace placeholders with actual determined values
-    echo "$MANIFEST_TEMPLATE" | \
+    # Replace placeholder values in the manifest
+    echo "$manifest_template" | \
         sed "s/FINAL_DEPLOY_FALCON_ADMISSION/$DEPLOY_FALCON_ADMISSION/g" | \
-        sed "s/FINAL_DEPLOY_FALCON_IMAGE_ANALYZER/$DEPLOY_FALCON_IMAGE_ANALYZER/g" | \
-        sed "s/FINAL_DEPLOY_NODE_SENSOR/$FINAL_DEPLOY_NODE_SENSOR/g" | \
-        sed "s/FINAL_DEPLOY_CONTAINER/$FINAL_DEPLOY_CONTAINER/g" > "$manifest_file"
+        sed "s/FINAL_DEPLOY_FALCON_IMAGE_ANALYZER/$DEPLOY_FALCON_IMAGE_ANALYZER/g" > "$manifest_file"
     
     if [ ! -f "$manifest_file" ]; then
         log "ERROR" "Failed to create FalconDeployment manifest file"
@@ -337,9 +237,13 @@ create_falcon_deployment() {
     log "SUCCESS" "FalconDeployment manifest prepared successfully"
     log "INFO" "Manifest file: $manifest_file"
 
+    # Show the manifest content for debugging
+    log "INFO" "FalconDeployment manifest content:"
+    cat "$manifest_file"
+
     # Apply the FalconDeployment
     log "INFO" "Applying FalconDeployment manifest"
-    log "INFO" "Components enabled: NodeSensor=$FINAL_DEPLOY_NODE_SENSOR, Container=$FINAL_DEPLOY_CONTAINER, Admission=$DEPLOY_FALCON_ADMISSION, ImageAnalyzer=$DEPLOY_FALCON_IMAGE_ANALYZER"
+    log "INFO" "Components: Node Sensor = $DEPLOY_FALCON_NODE_SENSOR, Container Sensor = $DEPLOY_FALCON_CONTAINER, Admission Controller = $DEPLOY_FALCON_ADMISSION, Image Analyzer = $DEPLOY_FALCON_IMAGE_ANALYZER"
     
     kubectl apply -f "$manifest_file"
     
@@ -357,10 +261,10 @@ create_falcon_deployment() {
         
         # Show created resources
         log "INFO" "Checking created Falcon resources..."
-        if [[ "$FINAL_DEPLOY_NODE_SENSOR" == "true" ]]; then
+        if [[ "$DEPLOY_FALCON_NODE_SENSOR" == "true" ]]; then
             kubectl get falconnodesensor -A 2>/dev/null || log "WARNING" "FalconNodeSensor not yet created"
         fi
-        if [[ "$FINAL_DEPLOY_CONTAINER" == "true" ]]; then
+        if [[ "$DEPLOY_FALCON_CONTAINER" == "true" ]]; then
             kubectl get falconcontainer -A 2>/dev/null || log "WARNING" "FalconContainer not yet created"
         fi
         if [[ "$DEPLOY_FALCON_ADMISSION" == "true" ]]; then
@@ -387,9 +291,6 @@ main() {
     # Configure EKS
     configure_eks
     
-    # Detect cluster type
-    detect_cluster_type
-    
     # Continue with existing checks
     check_kubectl
     check_cluster_connection
@@ -404,6 +305,16 @@ main() {
     create_falcon_deployment
     
     log "SUCCESS" "CrowdStrike Falcon Operator and resources deployment completed successfully"
+    log "INFO" "=== Deployment Summary ==="
+    log "INFO" "- FalconNodeSensor: $DEPLOY_FALCON_NODE_SENSOR"
+    log "INFO" "- FalconContainer: $DEPLOY_FALCON_CONTAINER"
+    log "INFO" "- FalconAdmission: $DEPLOY_FALCON_ADMISSION"
+    log "INFO" "- FalconImageAnalyzer: $DEPLOY_FALCON_IMAGE_ANALYZER"
+    if [[ "$DEPLOY_FALCON_CONTAINER" == "true" ]]; then
+        log "INFO" "NOTE:"
+        log "INFO" "To enable container sensor injection on Fargate pods, add label:"
+        log "INFO" "  falcon.crowdstrike.com/inject: \"true\""
+    fi
 }
 
 # Run main function

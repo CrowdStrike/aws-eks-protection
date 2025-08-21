@@ -226,3 +226,6 @@ temp/
 
 # Config files
 *.json
+
+# Testing
+testing/

@@ -99,20 +99,20 @@ Parameters:
   DeployFalconImageAnalyzer:
     Type: String 
     Description: Deploy Falcon Image Analyzer (requires additional API permissions)
-    Default: 'false'
+    Default: 'true'
     AllowedValues: ['true', 'false']
 
   DeployFalconNodeSensor:
     Type: String
-    Description: Deploy Falcon Node Sensor (auto-detects based on cluster type)
-    Default: 'auto'
-    AllowedValues: ['auto', 'true', 'false']
+    Description: Deploy Falcon Node Sensor (Use taints to prevent schedule on Fargate. See Readme for details.)
+    Default: 'true'
+    AllowedValues: ['true', 'false']
 
   DeployFalconContainer:
     Type: String
-    Description: Deploy Falcon Container Sensor (auto-detects based on cluster type)  
-    Default: 'auto'
-    AllowedValues: ['auto', 'true', 'false']
+    Description: Deploy Falcon Container Sensor
+    Default: 'true'
+    AllowedValues: ['true', 'false']
 
   ResourcePrefix:
     Type: String
@@ -190,12 +190,18 @@ Resources:
           # Falcon API configuration
           falcon_api:
             cloud_region: ${FalconCloud}
-          
-          # Component deployment flags (will be updated by script based on cluster type)
-          deployNodeSensor: FINAL_DEPLOY_NODE_SENSOR
-          deployContainerSensor: FINAL_DEPLOY_CONTAINER
-          deployAdmissionController: FINAL_DEPLOY_FALCON_ADMISSION
-          deployImageAnalyzer: FINAL_DEPLOY_FALCON_IMAGE_ANALYZER
+
+          # Component deployment flags
+          deployNodeSensor: ${DeployFalconNodeSensor}
+          deployContainerSensor: ${DeployFalconContainer}
+          deployAdmissionController: ${DeployFalconAdmission}
+          deployImageAnalyzer: ${DeployFalconImageAnalyzer}
+
+          # Disable Default Injection of Container Sensor
+          falconContainerSensor:
+            injector:
+              disableDefaultNamespaceInjection: true
+              disableDefaultPodInjection: true
 
   # ECS Cluster
   ECSCluster:
