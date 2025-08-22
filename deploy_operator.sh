@@ -18,8 +18,9 @@ FALCON_OPERATOR_VERSION=${FALCON_OPERATOR_VERSION:-"latest"}
 # FalconDeployment component configuration
 DEPLOY_FALCON_ADMISSION=${DEPLOY_FALCON_ADMISSION:-"true"}
 DEPLOY_FALCON_IMAGE_ANALYZER=${DEPLOY_FALCON_IMAGE_ANALYZER:-"true"}
-DEPLOY_FALCON_NODE_SENSOR=${DEPLOY_FALCON_NODE_SENSOR:-"true"}
-DEPLOY_FALCON_CONTAINER=${DEPLOY_FALCON_CONTAINER:-"true"}
+DEPLOY_FALCON_NODE_SENSOR="false"
+DEPLOY_FALCON_CONTAINER="false"
+IS_FARGATE="false"
 
 # Parameter Store configuration
 FALCON_DEPLOYMENT_PARAMETER=${FALCON_DEPLOYMENT_PARAMETER:-"/crowdstrike/falcon-eks-protection/falcon-deployment-manifest"}
@@ -51,22 +52,15 @@ handle_error() {
     local exit_code=$1
     local line_number=$2
     log "ERROR" "Script failed at line $line_number with exit code $exit_code"
-    cleanup
     exit $exit_code
-}
-
-# Cleanup function
-cleanup() {
-    log "INFO" "Performing cleanup..."
-    # Add cleanup tasks here
 }
 
 # Set error handling after functions are defined
 set -eo pipefail
 trap 'handle_error $? $LINENO' ERR
 
-# Function to check AWS CLI and configure EKS
-configure_eks() {
+# Function to check AWS CLI and configure EKS kubeconfig
+set_kubeconfig() {
     if ! command -v aws &> /dev/null; then
         log "ERROR" "AWS CLI is not installed"
         exit 1
@@ -77,20 +71,16 @@ configure_eks() {
         exit 1
     fi
 
-    log "INFO" "Updating kubeconfig for EKS cluster: $EKS_CLUSTER_NAME"
     aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
 }
 
-# Function to check if kubectl is available
-check_kubectl() {
+# Function to check kubectl and cluster connectivity
+check_cluster_connection() {
     if ! command -v kubectl &> /dev/null; then
         log "ERROR" "kubectl is not installed"
         exit 1
     fi
-}
 
-# Function to check cluster connectivity
-check_cluster_connection() {
     if ! kubectl cluster-info &> /dev/null; then
         log "ERROR" "Unable to connect to Kubernetes cluster"
         exit 1
@@ -127,15 +117,172 @@ check_falcon_operator_installed() {
     fi
 }
 
+detect_cluster_type() {
+    log "INFO" "Detecting cluster type for $EKS_CLUSTER_NAME"
+    local max_attempts=6
+    local attempt=1
+
+    # Check for Fargate profiles
+    while [[ $attempt -le $max_attempts ]]; do
+        log "INFO" "Looking for Fargate profiles (attempt $attempt/$max_attempts)..."
+        
+        if aws eks list-fargate-profiles \
+            --cluster-name "$EKS_CLUSTER_NAME" \
+            --region "$AWS_REGION" \
+            --query 'fargateProfileNames' \
+            --output text 2>/dev/null | grep -v -q "None"; then
+            export IS_FARGATE="true"
+            log "INFO" "Cluster has fargate profiles"
+            break
+        fi
+
+        # fargate_profiles=$(aws eks list-fargate-profiles \
+        #     --cluster-name "$EKS_CLUSTER_NAME" \
+        #     --region "$AWS_REGION" \
+        #     --query 'fargateProfileNames' \
+        #     --output text 2>/dev/null)
+        
+        # if [[ -n "$fargate_profiles" ]] && [[ "$fargate_profiles" != "None" ]] && [[ "$fargate_profiles" != "" ]]; then
+        #     log "INFO" "Found Fargate profiles: $fargate_profiles"
+        #     break
+        # fi
+        if [[ $attempt -eq $max_attempts ]]; then
+            log "WARN" "No Fargate profiles found after $max_attempts attempts"
+            break
+        fi
+        
+        sleep 10
+        attempt=$((attempt + 1))
+    done
+
+    # Check for node groups
+    local attempt=1
+    while [[ $attempt -le $max_attempts ]]; do
+        log "INFO" "Looking for node groups (attempt $attempt/$max_attempts)..."
+        
+        if aws eks list-nodegroups \
+            --cluster-name "$EKS_CLUSTER_NAME" \
+            --region "$AWS_REGION" \
+            --query 'nodegroups[0]' \
+            --output text 2>/dev/null | grep -v -q "None"; then
+            HAS_NODES="true"
+            log "INFO" "Cluster has node groups"
+            break
+        fi
+        
+        if [[ $attempt -eq $max_attempts ]]; then
+            log "WARN" "No node groups found after $max_attempts attempts"
+            break
+        fi
+        
+        sleep 10
+        ((attempt++))
+    done
+
+
+    if [[ "$IS_FARGATE" == "true" ]]; then
+        export DEPLOY_FALCON_CONTAINER="true"
+    fi
+    if [[ "$HAS_NODES" == "true" ]]; then
+        export DEPLOY_FALCON_NODE_SENSOR="true"
+    fi
+    # If neither found, default to node deployment
+    if [[ "$IS_FARGATE" == "false" && "$HAS_NODES" == "false" ]]; then
+        export DEPLOY_FALCON_NODE_SENSOR="true"
+    fi
+}
+
+determine_sensor() {
+    if [[ "$SENSOR_TYPE" == "node" ]]; then
+        export DEPLOY_FALCON_NODE_SENSOR="true"
+    fi
+    if [[ "$SENSOR_TYPE" == "container" ]]; then
+        export DEPLOY_FALCON_CONTAINER="true"
+    fi
+    # If neither found, default to node deployment
+    if [[ "$SENSOR_TYPE" == "both" ]]; then
+        export DEPLOY_FALCON_CONTAINER="true"
+        export DEPLOY_FALCON_NODE_SENSOR="true"
+    fi
+}
+
+install_fargate_profile() {
+    if ! aws eks describe-fargate-profile \
+            --region "$AWS_REGION" \
+            --cluster-name "$EKS_CLUSTER_NAME" \
+            --fargate-profile-name fp-falcon-operator \
+            --query 'fargateProfile.fargateProfileName' \
+            --output text &>/dev/null; then
+    
+        log "INFO" "Attempting to discover existing Fargate pod execution role..."
+        
+        # Try to get role ARN from existing Fargate profile
+        log "INFO" "Checking existing Fargate profiles for role ARN..."
+        local existing_profile=$(aws eks list-fargate-profiles \
+            --cluster-name "$EKS_CLUSTER_NAME" \
+            --region "$AWS_REGION" \
+            --query 'fargateProfileNames[0]' \
+            --output text 2>/dev/null)
+
+        if [ "$existing_profile" != "None" ] && [ -n "$existing_profile" ]; then
+            local role_arn=$(aws eks describe-fargate-profile \
+                --cluster-name "$EKS_CLUSTER_NAME" \
+                --fargate-profile-name "$existing_profile" \
+                --region "$AWS_REGION" \
+                --query 'fargateProfile.podExecutionRoleArn' \
+                --output text 2>/dev/null)
+        fi
+
+        if [ -n "$role_arn" ] && [ "$role_arn" != "None" ]; then
+            log "INFO" "Found role ARN from existing Fargate profile '$existing_profile': $role_arn"
+        else
+            # Else try to look for roles with the Fargate execution policy attached
+            log "INFO" "Searching for roles with AmazonEKSFargatePodExecutionRolePolicy..."
+            local role_name=$(aws iam list-entities-for-policy \
+                --policy-arn arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy \
+                --entity-filter Role \
+                --query 'PolicyRoles[0].RoleName' \
+                --output text 2>/dev/null)
+            
+            if [ "$role_name" != "None" ] && [ -n "$role_name" ]; then
+                local role_arn="arn:aws:iam::${ACCOUNT_ID}:role/${role_name}"
+                log "INFO" "Found role with Fargate execution policy: $role_arn"
+            fi
+        fi
+
+        log "INFO" "Creating Fargate profile fp-falcon-operator..."
+        if [ -z "$role_arn" ]; then
+            log "ERROR" "No Fargate pod execution role found using any discovery method"
+            log "ERROR" "Please ensure:"
+            log "ERROR" "  1. A role exists with the AmazonEKSFargatePodExecutionRolePolicy attached, OR"
+            log "ERROR" "  2. An existing Fargate profile exists in the cluster"
+            exit 1
+        fi
+        aws eks create-fargate-profile \
+            --region "$AWS_REGION" \
+            --cluster-name "$EKS_CLUSTER_NAME" \
+            --fargate-profile-name fp-falcon-operator \
+            --pod-execution-role-arn "$role_arn" \
+            --selectors namespace=falcon-operator
+
+    else
+        log "INFO" "Fargate profile fp-falcon-operator exists"
+    fi
+}
+
 # Function to install CrowdStrike Falcon Operator
 install_falcon_operator() {
     log "INFO" "Installing CrowdStrike Falcon Operator"
-    
+
+    if [[ "$IS_FARGATE" == "true" ]] && [[ "$DEPLOY_FALCON_NODE_SENSOR" == "false" ]]; then
+        install_fargate_profile
+    fi
+
     if [[ "$DEPLOY_FALCON_OPERATOR" != "true" ]]; then
         log "INFO" "Falcon Operator deployment disabled, skipping installation"
         return 0
     fi
-    
+
     # Check if already installed
     if check_falcon_operator_installed; then
         log "SUCCESS" "Falcon Operator is already installed"
@@ -148,6 +295,11 @@ install_falcon_operator() {
     log "INFO" "Applying Falcon Operator manifest from: $operator_url"
     kubectl apply -f "$operator_url"
     
+    wait_for_operator
+}
+
+# Function to wait for operator to be ready
+wait_for_operator() {
     # Wait for operator to be ready
     log "INFO" "Waiting for Falcon Operator to be ready..."
     kubectl wait --for=condition=available \
@@ -205,29 +357,17 @@ create_falcon_deployment() {
     
     # Create API credentials secret
     create_falcon_secret
-    
-    # Get FalconDeployment Manifest from Parameter Store
-    log "INFO" "Retrieving FalconDeployment manifest from Parameter Store: $FALCON_DEPLOYMENT_PARAMETER"
-    
-    local manifest_template
-    manifest_template=$(aws ssm get-parameter \
-        --name "$FALCON_DEPLOYMENT_PARAMETER" \
-        --region "$AWS_REGION" \
-        --query 'Parameter.Value' \
-        --output text)
-    
-    if [[ -z "$manifest_template" ]]; then
-        log "ERROR" "Failed to retrieve FalconDeployment manifest from Parameter Store"
-        exit 1
-    fi
-    
+ 
     # Create temporary manifest file with substitutions
+    # shellcheck disable=SC2155
     local manifest_file="/tmp/falcon-deployment-$(date +%s).yaml"
     
     # Replace placeholder values in the manifest
-    echo "$manifest_template" | \
-        sed "s/FINAL_DEPLOY_FALCON_ADMISSION/$DEPLOY_FALCON_ADMISSION/g" | \
-        sed "s/FINAL_DEPLOY_FALCON_IMAGE_ANALYZER/$DEPLOY_FALCON_IMAGE_ANALYZER/g" > "$manifest_file"
+    echo "$MANIFEST_TEMPLATE" | \
+        sed "s/SET_NODE_SENSOR/$DEPLOY_FALCON_NODE_SENSOR/g" | \
+        sed "s/SET_CONTAINER_SENSOR/$DEPLOY_FALCON_CONTAINER/g" | \
+        sed "s/SET_FALCON_ADMISSION/$DEPLOY_FALCON_ADMISSION/g" | \
+        sed "s/SET_IMAGE_ANALYZER/$DEPLOY_FALCON_IMAGE_ANALYZER/g" > "$manifest_file"
     
     if [ ! -f "$manifest_file" ]; then
         log "ERROR" "Failed to create FalconDeployment manifest file"
@@ -285,23 +425,21 @@ create_falcon_deployment() {
 }
 
 # Main execution
-main() {
-    log "INFO" "Starting EKS cluster setup and CrowdStrike Falcon Operator deployment"
-    
-    # Configure EKS
-    configure_eks
-    
-    # Continue with existing checks
-    check_kubectl
+main() {    
+    # Setup and check configuration
+    set_kubeconfig
     check_cluster_connection
-    
+    if [[ "$SENSOR_TYPE" == "auto" ]]; then
+        detect_cluster_type
+    else
+        determine_sensor
+    fi
+
     # CrowdStrike Falcon Operator Installation
-    log "INFO" "=== CrowdStrike Falcon Operator Setup ==="
     validate_falcon_credentials
     install_falcon_operator
     
     # Deploy Falcon resources
-    log "INFO" "=== CrowdStrike Falcon Resources Deployment ==="
     create_falcon_deployment
     
     log "SUCCESS" "CrowdStrike Falcon Operator and resources deployment completed successfully"

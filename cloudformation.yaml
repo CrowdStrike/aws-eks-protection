@@ -26,8 +26,8 @@ Metadata:
       - Label:
           default: Falcon Operator Options
         Parameters:
-          - DeployFalconNodeSensor
-          - DeployFalconContainer
+          - FalconSensorType
+          - Backend
           - DeployFalconAdmission
           - DeployFalconImageAnalyzer
       - Label:
@@ -102,17 +102,17 @@ Parameters:
     Default: 'true'
     AllowedValues: ['true', 'false']
 
-  DeployFalconNodeSensor:
+  Backend:
     Type: String
-    Description: Deploy Falcon Node Sensor (Use taints to prevent schedule on Fargate. See Readme for details.)
-    Default: 'true'
-    AllowedValues: ['true', 'false']
+    Description: Backend for Daemonset (node) sensor
+    Default: 'kernel'
+    AllowedValues: ['kernel', 'bpf']
 
-  DeployFalconContainer:
-    Type: String
-    Description: Deploy Falcon Container Sensor
-    Default: 'true'
-    AllowedValues: ['true', 'false']
+  FalconSensorType:
+    Type: String 
+    Description: Which Falcon Sensor to deploy.  auto will determine sensor based on cluster type (Recommended)
+    Default: 'auto'
+    AllowedValues: ['auto', 'both', 'node', 'container']
 
   ResourcePrefix:
     Type: String
@@ -192,10 +192,15 @@ Resources:
             cloud_region: ${FalconCloud}
 
           # Component deployment flags
-          deployNodeSensor: ${DeployFalconNodeSensor}
-          deployContainerSensor: ${DeployFalconContainer}
-          deployAdmissionController: ${DeployFalconAdmission}
-          deployImageAnalyzer: ${DeployFalconImageAnalyzer}
+          deployNodeSensor: SET_NODE_SENSOR
+          deployContainerSensor: SET_CONTAINER_SENSOR
+          deployAdmissionController: SET_FALCON_ADMISSION
+          deployImageAnalyzer: SET_IMAGE_ANALYZER
+
+          # Set Daemonset Backend
+          falconNodeSensor:
+            node:
+              backend: ${Backend}
 
           # Disable Default Injection of Container Sensor
           falconContainerSensor:
@@ -294,6 +299,10 @@ Resources:
                   - eks:DescribeCluster
                   - eks:ListClusters
                   - eks:ListFargateProfiles
+                  - eks:CreateFargateProfile
+                  - eks:DescribeFargateProfile
+                  - iam:PassRole
+                  - eks:ListNodeGroups
                   - eks:UpdateClusterConfig
                   - eks:DescribeUpdate
                   - eks:AssociateAccessPolicy
@@ -304,6 +313,12 @@ Resources:
                   - iam:AttachRolePolicy
                   - iam:GetRole
                   - iam:PassRole
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ListStacks
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeStackEvents
                 Resource: "*"
               - Effect: Allow
                 Action:
@@ -362,10 +377,8 @@ Resources:
               Value: !Ref DeployFalconAdmission
             - Name: DEPLOY_FALCON_IMAGE_ANALYZER
               Value: !Ref DeployFalconImageAnalyzer
-            - Name: DEPLOY_FALCON_NODE_SENSOR
-              Value: !Ref DeployFalconNodeSensor
-            - Name: DEPLOY_FALCON_CONTAINER
-              Value: !Ref DeployFalconContainer
+            - Name: SENSOR_TYPE
+              Value: !Ref FalconSensorType
             - Name: DEPLOY_SCRIPT_PARAMETER
               Value: !Ref DeployScriptParameter
             - Name: SETUP_SCRIPT_PARAMETER
@@ -912,10 +925,21 @@ Resources:
                           - eks:DescribeCluster
                           - eks:ListClusters
                           - eks:ListFargateProfiles
+                          - eks:CreateFargateProfile
+                          - eks:DescribeFargateProfile
+                          - iam:PassRole
+                          - iam:GetRole
+                          - eks:ListNodeGroups
                           - ec2:DescribeRegions
                           - eks:UpdateClusterConfig
                           - eks:DescribeUpdate
                           - eks:AssociateAccessPolicy
+                          - cloudformation:DescribeStacks
+                          - cloudformation:ListStacks
+                          - cloudformation:CreateStack
+                          - cloudformation:UpdateStack
+                          - cloudformation:DescribeStackResources
+                          - cloudformation:DescribeStackEvents
                         Resource: '*'
                       - Effect: Allow
                         Action: 

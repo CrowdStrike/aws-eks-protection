@@ -11,7 +11,6 @@ log() {
 # Function to validate and setup configuration
 setup_configuration() {
     log "INFO" "Setting up CrowdStrike Falcon EKS Protection configuration..."
-    
     # Validate required environment variables (now passed directly from EventBridge)
     if [[ -z "${EKS_CLUSTER_NAME}" ]]; then
         log "ERROR" "EKS_CLUSTER_NAME environment variable is required"
@@ -22,7 +21,15 @@ setup_configuration() {
         log "ERROR" "AWS_REGION environment variable is required"
         exit 1
     fi
-    
+
+    # Retrieve the manifest template from Parameter Store
+    MANIFEST_TEMPLATE=$(aws ssm get-parameter \
+        --name "$FALCON_DEPLOYMENT_PARAMETER" \
+        --region "$AWS_REGION" \
+        --query 'Parameter.Value' \
+        --output text)
+    export MANIFEST_TEMPLATE
+
     # Set default values for containerized execution
     export NAMESPACE=${NAMESPACE:-"default"}
     export POD_NAME=${POD_NAME:-"falcon-test-app"}
@@ -36,6 +43,29 @@ setup_configuration() {
     log "INFO" "  Account ID: ${ACCOUNT_ID:-'Not provided'}"
     log "INFO" "  Deploy Falcon Operator: ${DEPLOY_FALCON_OPERATOR}"
     log "INFO" "  Deploy Falcon Resources: ${DEPLOY_FALCON_RESOURCES}"
+}
+
+# Function to assume role if in an org
+assume_role() {
+    if [ ! "$SCOPE" = "local account" ]; then
+        log "INFO" "Assuming role: $SWITCH_ROLE"
+        
+        arn="arn:${PARTITION}:iam::${ACCOUNT_ID}:role/${SWITCH_ROLE}"
+        CREDENTIALS=$(aws sts assume-role \
+            --role-arn "$arn" \
+            --role-session-name "cs-eks-protect-$(date +%s)" \
+            --output json)
+        AWS_ACCESS_KEY_ID=$(echo "$CREDENTIALS" | jq -r '.Credentials.AccessKeyId')
+        export AWS_ACCESS_KEY_ID
+        AWS_SECRET_ACCESS_KEY=$(echo "$CREDENTIALS" | jq -r '.Credentials.SecretAccessKey')
+        export AWS_SECRET_ACCESS_KEY
+        AWS_SESSION_TOKEN=$(echo "$CREDENTIALS" | jq -r '.Credentials.SessionToken')
+        export AWS_SESSION_TOKEN
+        
+        log "INFO" "Role assumed successfully"
+    else
+        log "INFO" "No role to assume, using default credentials"
+    fi
 }
 
 # Function to wait for cluster to be available
@@ -62,43 +92,16 @@ wait_for_cluster() {
 # Main execution
 main() {
     log "INFO" "=== CrowdStrike Falcon EKS Protection - Event-Driven Execution ==="
-    
+
     # Setup config
     setup_configuration
-    
-    # Retrieve the manifest template from Parameter Store
-    MANIFEST_TEMPLATE=$(aws ssm get-parameter \
-        --name "$FALCON_DEPLOYMENT_PARAMETER" \
-        --region "$AWS_REGION" \
-        --query 'Parameter.Value' \
-        --output text)
-    export MANIFEST_TEMPLATE
 
-    # assume role
-    if [ ! "$SCOPE" = "local account" ]; then
-        log "INFO" "Assuming role: $SWITCH_ROLE"
-        
-        arn="arn:${PARTITION}:iam::${ACCOUNT_ID}:role/${SWITCH_ROLE}"
-        CREDENTIALS=$(aws sts assume-role \
-            --role-arn "$arn" \
-            --role-session-name "cs-eks-protect-$(date +%s)" \
-            --output json)
-        
-        AWS_ACCESS_KEY_ID=$(echo "$CREDENTIALS" | jq -r '.Credentials.AccessKeyId')
-        export AWS_ACCESS_KEY_ID
-        AWS_SECRET_ACCESS_KEY=$(echo "$CREDENTIALS" | jq -r '.Credentials.SecretAccessKey')
-        export AWS_SECRET_ACCESS_KEY
-        AWS_SESSION_TOKEN=$(echo "$CREDENTIALS" | jq -r '.Credentials.SessionToken')
-        export AWS_SESSION_TOKEN
-        
-        log "INFO" "Role assumed successfully"
-    else
-        log "INFO" "No role to assume, using default credentials"
-    fi
-    
+    # assume role if org deployment
+    assume_role
+
     # Wait for cluster to be available
     wait_for_cluster
-    
+
     # Setup Cluster Access
     log "INFO" "Updating Access configuration for cluster ${EKS_CLUSTER_NAME}..."
     python3 setup_cluster.py
