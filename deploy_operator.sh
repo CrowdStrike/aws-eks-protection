@@ -218,6 +218,7 @@ install_fargate_profile() {
         
         # Try to get role ARN from existing Fargate profile
         log "INFO" "Checking existing Fargate profiles for role ARN..."
+        # shellcheck disable=SC2155
         local existing_profile=$(aws eks list-fargate-profiles \
             --cluster-name "$EKS_CLUSTER_NAME" \
             --region "$AWS_REGION" \
@@ -225,6 +226,7 @@ install_fargate_profile() {
             --output text 2>/dev/null)
 
         if [ "$existing_profile" != "None" ] && [ -n "$existing_profile" ]; then
+            # shellcheck disable=SC2155
             local role_arn=$(aws eks describe-fargate-profile \
                 --cluster-name "$EKS_CLUSTER_NAME" \
                 --fargate-profile-name "$existing_profile" \
@@ -238,6 +240,7 @@ install_fargate_profile() {
         else
             # Else try to look for roles with the Fargate execution policy attached
             log "INFO" "Searching for roles with AmazonEKSFargatePodExecutionRolePolicy..."
+            # shellcheck disable=SC2155
             local role_name=$(aws iam list-entities-for-policy \
                 --policy-arn arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy \
                 --entity-filter Role \
