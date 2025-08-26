@@ -93,12 +93,11 @@ When manually running the ECS task, you must override these environment variable
 
 You can also override these variables to customize the deployment:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DEPLOY_FALCON_ADMISSION` | `true` | Deploy Falcon Kubernetes Admission Controller |
-| `DEPLOY_FALCON_IMAGE_ANALYZER` | `false` | Deploy Falcon Image Analyzer |
-| `DEPLOY_FALCON_NODE_SENSOR` | `auto` | Deploy Node Sensor (auto/true/false) |
-| `DEPLOY_FALCON_CONTAINER` | `auto` | Deploy Container Sensor (auto/true/false) |
+| Variable | Default | Description | Values |
+|----------|---------|-------------|--------|
+| `SENSOR_TYPE` | `auto` | Which Falcon Sensor Type to deploy. | `auto`, `both`, `container`, `node` |
+| `DEPLOY_FALCON_ADMISSION` | `true` |  Whether to deploy the Falcon Admission Controller. | `true`, `false` |
+| `DEPLOY_FALCON_IMAGE_ANALYZER` | `true` | Whether to deploy the Falcon Image Analyzer. | `true`, `false` |
 
 ## 📊 Monitoring Task Execution
 

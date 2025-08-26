@@ -21,18 +21,6 @@ An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and
 - 🌐 **Self-Contained Infrastructure**: Creates own VPC and networking
 - 🏢 **Organization Support**: Deploy across AWS Organizations or single accounts
 
-## 📁 File Structure
-
-```
-eks-protection/
-├── cloudformation.yaml                # Complete CloudFormation template
-├── deploy.sh                          # CloudFormation deployment script
-├── event_handler.sh                   # Retrieves event data and configures ECS Task environment
-├── setup_cluster.py                   # Updates cluster access and network config to ensure secure communication
-├── deploy_operator.sh                 # Deploys Falcon Operator and Deployment components
-└── README.md                          # This documentation
-```
-
 ## ⚙️ How It Works
 
 ### 1. Infrastructure Setup
@@ -50,14 +38,22 @@ eks-protection/
 ### 3. Enhanced Event-Driven Architecture
 - **EventBridge Rule**: Triggers when EKS clusters are created
 - **Centralized Custom EventBus**: EventBridge Rules across the AWS Organization target this to allow for a single, centralized ECS Cluster.
-- **ECS Fargate Task**: Invoked via EventBridge rule
+- **ECS Fargate Task**: Invoked via EventBridge rule to run EKS Protection Scripts
 
 ### 4. Intelligent Sensor Deployment
-- **Auto Mode**: Automatically selects appropriate sensors based on cluster type
-  - Fargate-only clusters → FalconContainer sensor
-  - Node-based clusters → FalconNodeSensor
-  - Hybrid clusters → FalconNodeSensor (preferred)
-- **Manual Override**: Explicit control via environment variables
+- **Auto Mode**: Set `SensorType` = `auto` to automatically select appropriate sensors based on cluster type
+  - Fargate-only clusters → Falcon Container sensor
+  - Node-based clusters → Falcon Node sensor
+  - Hybrid clusters → Falcon Node sensor & Falcon Container sensor
+- **Manual Override**: Set `SensorType` to `node`, `container` or `both` to force a sensor type and bypass cluster type detection
+
+### Container Sensor Injection Behavior
+- Container sensor injection disabled by default
+- `falcon-sidecar-injector` pods may run but only inject the container sensor if Fargate pods are labeled.
+- This prevents duplicative sensors when running hybrid clusters (EC2 and Fargate) and allows both `DEPLOY_FALCON_NODE_SENSOR = true` and `DEPLOY_FALCON_CONTAINER = true`.
+
+**NOTE: Use the following label to inject Falcon Container to your pods**  
+ `falcon.crowdstrike.com/inject: "true"`
 
 ## 📊 Event-Driven Architecture
 
@@ -80,32 +76,40 @@ EKS Cluster Creation → EventBridge → Centralized EventBus → ECS Fargate Ta
                                                             (with auto-detection)
 ```
 
-## 🎯 Configuration Options
+## 📋 CloudFormation Parameters
 
-### Core Falcon Deployment Parameters
+The following table describes all parameters available when deploying the CloudFormation template:
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `DEPLOY_FALCON_ADMISSION` | `true` | Deploy Admission Controller |
-| `DEPLOY_FALCON_IMAGE_ANALYZER` | `false` | Deploy Image Analyzer |
-| `DEPLOY_FALCON_NODE_SENSOR` | `auto` | Deploy Node Sensor |
-| `DEPLOY_FALCON_CONTAINER` | `auto` | Deploy Container Sensor |
+| Parameter | Type | Default | Description | Allowed Values |
+|-----------|------|---------|-------------|----------------|
+| **Deployment Configuration** |
+| `Scope` | String | `organization` | Whether to deploy across the organization or locally to the current AWS account | `organization`, `local account` |
+| `Regions` | List\<String\> | _(empty)_ | Which regions to deploy EventBridge rules | |
+| `OUs` | List\<String\> | _(empty)_ | Which OUs to onboard if Scope = organization. If onboarding the entire organization, use the root OU (r-******) | |
+| `OrganizationId` | String | _(empty)_ | Your AWS Organization Id if Scope = organization | |
+| `DelegatedAdmin` | String | `false` | Indicates whether this is a Delegated Administrator account | `true`, `false` |
+| `PermissionsBoundary` | String | _(empty)_ | The name of the policy used to set the permissions boundary for IAM roles | |
+| **Network Configuration** |
+| `VpcCidr` | String | `10.0.0.0/22` | CIDR block for the VPC | |
+| **Falcon API Credentials** |
+| `FalconClientId` | String | _(required)_ | CrowdStrike Falcon Client ID | |
+| `FalconClientSecret` | String | _(required)_ | CrowdStrike Falcon Client Secret | |
+| `FalconCloud` | String | _(required)_ | CrowdStrike Falcon Cloud | `us-1`, `us-2`, `eu-1`, `us-gov-1`, `us-gov-2` |
+| **Falcon Operator Options** |
+| `DeployFalconAdmission` | String | `true` | Deploy Falcon Kubernetes Admission Controller | `true`, `false` |
+| `DeployFalconImageAnalyzer` | String | `true` | Deploy Falcon Image Analyzer (requires additional API permissions) | `true`, `false` |
+| `Backend` | String | `kernel` | Backend for Daemonset (node) sensor | `kernel`, `bpf` |
+| `FalconSensorType` | String | `auto` | Which Falcon Sensor to deploy. auto will determine sensor based on cluster type (Recommended) | `auto`, `both`, `node`, `container` |
+| **Resource Names** |
+| `ResourcePrefix` | String | `crowdstrike-eks-protection` | The prefix to be added to all resource names | |
+| `ResourceSuffix` | String | _(empty)_ | The suffix to be added to all resource names | |
 
-### Sensor Deployment Logic
+### Parameter Notes
 
-| Cluster Type | Node Sensor | Container Sensor | Logic |
-|--------------|-------------|------------------|-------|
-| Fargate-only | ❌ | ✅ | Container sensor required for Fargate |
-| Node-based | ✅ | ❌ | Node sensor preferred for EC2 instances |
-| Hybrid | ✅ | ❌ | Node sensor covers both EC2 and Fargate |
-
-## 🔐 Security Features
-
-- **IAM Roles**: Separate execution and task roles with minimal permissions
-- **Secrets Manager**: API credentials stored securely, never in logs
-- **VPC Deployment**: ECS tasks run in private subnets
-- **No Public IP/Ingress on Tasks**: All communication through NAT
-- **Script Integrity**: Scripts pulled from trusted GitHub repository
+- **Falcon API Credentials**: All three Falcon parameters (`FalconClientId`, `FalconClientSecret`, `FalconCloud`) are required for deployment
+- **Organization Deployment**: When `Scope` is set to `organization`, you must also provide `OrganizationId` and `OUs`
+- **Sensor Type Auto-Detection**: When `FalconSensorType` is set to `auto`, the system automatically selects the appropriate sensor based on cluster configuration
+- **Secure Parameters**: `FalconClientId` and `FalconClientSecret` are marked as `NoEcho` and will be stored securely in AWS Secrets Manager
 
 ## 📄 Support and License
 
