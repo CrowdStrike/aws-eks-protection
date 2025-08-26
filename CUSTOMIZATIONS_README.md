@@ -29,11 +29,16 @@ To make changes to your Falcon Deployment manifest:
           falcon_api:
             cloud_region: ${FalconCloud}
 
-          # Component deployment flags
-          deployNodeSensor: ${DeployFalconNodeSensor}
-          deployContainerSensor: ${DeployFalconContainer}
-          deployAdmissionController: ${DeployFalconAdmission}
-          deployImageAnalyzer: ${DeployFalconImageAnalyzer}
+          # Component deployment flags, DO NOT MODIFY
+          deployNodeSensor: SET_NODE_SENSOR
+          deployContainerSensor: SET_CONTAINER_SENSOR
+          deployAdmissionController: SET_FALCON_ADMISSION
+          deployImageAnalyzer: SET_IMAGE_ANALYZER
+
+          # Set Daemonset Backend
+          falconNodeSensor:
+            node:
+              backend: ${Backend}
 
           # Disable Default Injection of Container Sensor
           falconContainerSensor:
@@ -86,14 +91,16 @@ ContainerDefinitions:
   - Image: your-custom-image:tag
 ```
 
-2. Ensure the image contains required tools: kubectl, aws-cli, curl, bash
+**Note**: Ensure the image contains required tools: kubectl, aws-cli, curl, bash
+
+2. Redeploy the CloudFormation stack
 
 ### Environment Variable Extensions
 
 Add custom environment variables to the ECS task definition:
 ```yaml
 Environment:
-  - Name: CUSTOM_TIMEOUT
+  - Name: TIMEOUT
     Value: "600"
   - Name: FALCON_OPERATOR_NAMESPACE
     Value: "custom-namespace"
