@@ -14,7 +14,6 @@ An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and
 ## ✨ Features
 
 - 🚀 **Event-Driven Automation**: Automatically installs Falcon components when EKS clusters are created
-- 🐳 **No Build Dependencies**: Uses public `alpine/k8s:1.28.4` container image
 - 🎯 **Intelligent Sensor Selection**: Auto-detects cluster type and deploys appropriate sensors
 - 🔒 **Secure**: API credentials stored in AWS Secrets Manager
 - 📊 **Observable**: Complete CloudWatch logging with structured output
@@ -25,9 +24,9 @@ An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and
 
 ### 1. Infrastructure Setup
 - **Self-Contained**: ECS Task runs in a dedicated VPC, subnets, NAT Gateway, and security groups
-- **Container Image**: Uses public `alpine/k8s:1.28.4` image 
-  - pre-installed tools: kubectl, aws-cli, helm, bash, curl, jq, eksctl
-  - pulls latest scripts from GitHub at runtime
+- **Container Image**: Uses public `amazon/aws-cli:2.15.30` image 
+  - pre-installed tools: aws-cli
+  - installs dependencies and pulls latest scripts from GitHub at runtime
 
 ### 2. Script Details
 - **Event Handler**: Retrieves event data and configures ECS Task environment with required variables such as Cluster name, AWS Account ID, AWS Region
@@ -60,7 +59,7 @@ An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and
 ```
 EKS Cluster Creation → EventBridge → Centralized EventBus → ECS Fargate Task
                            ↓                                     ↓
-                     Get cluster name,                      alpine/k8s:1.28.4
+                     Get cluster name,                      amazon/aws-cli:2.15.30
                      region, account Id                     (in private VPC)
                                                                  ↓
                                                             Secrets Manager
@@ -100,6 +99,7 @@ The following table describes all parameters available when deploying the CloudF
 | `DeployFalconImageAnalyzer` | String | `true` | Deploy Falcon Image Analyzer (requires additional API permissions) | `true`, `false` |
 | `Backend` | String | `kernel` | Backend for Daemonset (node) sensor | `kernel`, `bpf` |
 | `FalconSensorType` | String | `auto` | Which Falcon Sensor to deploy. auto will determine sensor based on cluster type (Recommended) | `auto`, `both`, `node`, `container` |
+| `KubectlVersion` | String | `1.33.0` | Version of kubectl to install | |
 | **Resource Names** |
 | `ResourcePrefix` | String | `crowdstrike-eks-protection` | The prefix to be added to all resource names | |
 | `ResourceSuffix` | String | _(empty)_ | The suffix to be added to all resource names | |
@@ -109,6 +109,7 @@ The following table describes all parameters available when deploying the CloudF
 - **Falcon API Credentials**: All three Falcon parameters (`FalconClientId`, `FalconClientSecret`, `FalconCloud`) are required for deployment
 - **Organization Deployment**: When `Scope` is set to `organization`, you must also provide `OrganizationId` and `OUs`
 - **Sensor Type Auto-Detection**: When `FalconSensorType` is set to `auto`, the system automatically selects the appropriate sensor based on cluster configuration
+- **kubectl Version Compatibility**: kubectl version 1.33.0 is compatible with Kubernetes versions 1.31-1.34. Ensure kubectl version compatibility with your target Kubernetes cluster versions.  Typically the kubectl version should be within 1 minor and 1 major version of your kubernetes cluster version.
 - **Secure Parameters**: `FalconClientId` and `FalconClientSecret` are marked as `NoEcho` and will be stored securely in AWS Secrets Manager
 
 ## 📄 Support and License
