@@ -30,6 +30,7 @@ Metadata:
           - Backend
           - DeployFalconAdmission
           - DeployFalconImageAnalyzer
+          - KubectlVersion
       - Label:
           default: Resource Names
         Parameters:
@@ -123,6 +124,11 @@ Parameters:
     Type: String
     Description: The suffix be added to all resource names
     Default: ''
+
+  KubectlVersion:
+    Type: String
+    Description: Version of kubectl to install (see readme for recommendations)
+    Default: '1.33.0'
 
 Conditions:
   SetPermissionsBoundary: !Not [ !Equals [ !Ref PermissionsBoundary, '' ]]
@@ -360,8 +366,8 @@ Resources:
               # Install required tools
               yum update -y && yum install -y curl jq python3 python3-pip tar gzip unzip
               
-              # Install kubectl (compatible with Kubernetes 1.31-1.34)
-              curl -LO "https://dl.k8s.io/release/v1.33.0/bin/linux/amd64/kubectl"
+              # Install kubectl
+              curl -LO "https://dl.k8s.io/release/v${KubectlVersion}/bin/linux/amd64/kubectl"
               chmod +x kubectl && mv kubectl /usr/local/bin/
               
               # Install helm
