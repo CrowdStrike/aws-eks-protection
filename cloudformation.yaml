@@ -351,12 +351,38 @@ Resources:
       TaskRoleArn: !GetAtt ECSTaskRole.Arn
       ContainerDefinitions:
         - Name: falcon-eks-protection
-          Image: alpine/k8s:1.28.4
+          Image: amazon/aws-cli:2.15.30
           Essential: true
-          EntryPoint: ["/bin/sh"]
+          EntryPoint: ["/bin/bash"]
           Command:
             - "-c"
-            - "HANDLER_URL=$(aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/event_handler.sh $HANDLER_URL && SETUP_URL=$(aws ssm get-parameter --name $SETUP_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/setup_cluster.py $SETUP_URL && DEPLOY_URL=$(aws ssm get-parameter --name $DEPLOY_SCRIPT_PARAMETER --query Parameter.Value --output text) && curl -L -o /app/deploy_operator.sh $DEPLOY_URL && chmod +x /app/*.sh && chmod +x /app/*.py && mkdir -p /root/.kube /app && apk add --no-cache --quiet python3 py3-pip && pip3 install -qqq boto3 botocore && /app/event_handler.sh" 
+            - |
+              # Install required tools
+              yum update -y && yum install -y curl jq python3 python3-pip tar gzip unzip
+              
+              # Install kubectl (compatible with Kubernetes 1.31-1.34)
+              curl -LO "https://dl.k8s.io/release/v1.33.0/bin/linux/amd64/kubectl"
+              chmod +x kubectl && mv kubectl /usr/local/bin/
+              
+              # Install helm
+              curl -fsSL https://get.helm.sh/helm-v3.13.0-linux-amd64.tar.gz | tar -xz
+              mv linux-amd64/helm /usr/local/bin/
+              
+              # Install Python dependencies
+              pip3 install boto3 botocore
+              
+              # Create working directory and download scripts
+              mkdir -p /root/.kube /app && cd /app
+              HANDLER_URL=$(aws ssm get-parameter --name $EVENT_HANDLER_PARAMETER --query Parameter.Value --output text)
+              curl -L -o /app/event_handler.sh $HANDLER_URL
+              SETUP_URL=$(aws ssm get-parameter --name $SETUP_SCRIPT_PARAMETER --query Parameter.Value --output text)
+              curl -L -o /app/setup_cluster.py $SETUP_URL
+              DEPLOY_URL=$(aws ssm get-parameter --name $DEPLOY_SCRIPT_PARAMETER --query Parameter.Value --output text)
+              curl -L -o /app/deploy_operator.sh $DEPLOY_URL
+              chmod +x /app/*.sh && chmod +x /app/*.py
+              
+              # Execute
+              /app/event_handler.sh
           WorkingDirectory: "/app"
           LogConfiguration:
             LogDriver: awslogs
