@@ -205,6 +205,6 @@ If for any reason you want to disable or "pause" the event triggers for this sol
 ### Version Compatibility
 
 - **EKS**: Compatible with all supported EKS versions (1.25+)
-- **Kubernetes**: Uses kubectl v1.28.4 (compatible with K8s 1.25-1.30)
-- **AWS CLI**: Latest v2 included in alpine/k8s image
+- **Kubernetes**: Uses kubectl v1.33.0 (compatible with K8s 1.31-34)
+- **AWS CLI**: Latest v2 included in amazon/aws-cli image
 - **Falcon Operator**: Uses latest stable release
