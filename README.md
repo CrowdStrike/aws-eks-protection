@@ -1,3 +1,6 @@
+![CrowdStrike Logo (Light)](https://raw.githubusercontent.com/CrowdStrike/.github/main/assets/cs-logo-light-mode.png#gh-light-mode-only)
+![CrowdStrike Logo (Dark)](https://raw.githubusercontent.com/CrowdStrike/.github/main/assets/cs-logo-dark-mode.png#gh-dark-mode-only)
+
 # CrowdStrike Falcon EKS Protection
 
 An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and ImageAnalyzer to EKS clusters across your AWS Organization using event-driven architecture.
