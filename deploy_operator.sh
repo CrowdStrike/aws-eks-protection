@@ -81,8 +81,29 @@ check_cluster_connection() {
         exit 1
     fi
 
-    if ! kubectl cluster-info &> /dev/null; then
+    log "INFO" "Testing Kubernetes cluster connectivity..."
+    
+    # Debug information
+    log "INFO" "Current kubeconfig context:"
+    kubectl config current-context || log "WARNING" "No current context set"
+    
+    log "INFO" "Cluster endpoint from kubeconfig:"
+    kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' || log "WARNING" "Cannot get cluster endpoint"
+    
+    log "INFO" "Testing cluster connectivity with detailed output..."
+    if ! kubectl cluster-info; then
         log "ERROR" "Unable to connect to Kubernetes cluster"
+        
+        # Additional debugging
+        log "INFO" "Attempting to get cluster version for more details..."
+        kubectl version --short 2>&1 || log "WARNING" "kubectl version failed"
+        
+        log "INFO" "Testing DNS resolution..."
+        nslookup $(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed 's|https://||' | cut -d: -f1) || log "WARNING" "DNS resolution failed"
+        
+        log "INFO" "Testing network connectivity..."
+        nc -zv $(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed 's|https://||' | cut -d: -f1) 443 || log "WARNING" "Network connectivity test failed"
+        
         exit 1
     fi
     log "SUCCESS" "Connected to Kubernetes cluster"
