@@ -85,6 +85,13 @@ check_cluster_connection() {
 
     log "INFO" "Testing Kubernetes cluster connectivity..."
     
+    # Debug AWS credentials and token generation
+    log "INFO" "Current AWS identity:"
+    aws sts get-caller-identity || log "ERROR" "AWS credentials not working"
+    
+    log "INFO" "Testing direct AWS EKS get-token call:"
+    aws eks get-token --cluster-name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" || log "ERROR" "AWS EKS get-token failed"
+    
     # Debug information
     log "INFO" "Current kubeconfig context:"
     kubectl config current-context || log "WARNING" "No current context set"
@@ -98,13 +105,7 @@ check_cluster_connection() {
         
         # Additional debugging
         log "INFO" "Attempting to get cluster version for more details..."
-        kubectl version --short 2>&1 || log "WARNING" "kubectl version failed"
-        
-        log "INFO" "Testing DNS resolution..."
-        nslookup $(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed 's|https://||' | cut -d: -f1) || log "WARNING" "DNS resolution failed"
-        
-        log "INFO" "Testing network connectivity..."
-        nc -zv $(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' | sed 's|https://||' | cut -d: -f1) 443 || log "WARNING" "Network connectivity test failed"
+        kubectl version 2>&1 || log "WARNING" "kubectl version failed"
         
         exit 1
     fi
