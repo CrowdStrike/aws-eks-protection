@@ -4,6 +4,10 @@
 TIMEOUT=${TIMEOUT:-300}
 AWS_REGION=${AWS_REGION:-""}
 EKS_CLUSTER_NAME=${EKS_CLUSTER_NAME:-""}
+ACCOUNT_ID=${ACCOUNT_ID:-""}
+
+# Role assumption configuration
+EXECUTION_ROLE_NAME="crowdstrike-eks-protection-execution-role"
 
 # CrowdStrike Falcon Operator configuration
 FALCON_OPERATOR_NAMESPACE=${FALCON_OPERATOR_NAMESPACE:-"falcon-operator"}
@@ -58,6 +62,44 @@ handle_error() {
 # Set error handling after functions are defined
 set -eo pipefail
 trap 'handle_error $? $LINENO' ERR
+
+# Function to assume IAM role for EKS operations
+assume_execution_role() {
+    log "INFO" "Assuming role: $EXECUTION_ROLE_NAME"
+    
+    if [ -z "$ACCOUNT_ID" ]; then
+        ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    fi
+    
+    local role_arn="arn:aws:iam::${ACCOUNT_ID}:role/${EXECUTION_ROLE_NAME}"
+    local session_name="cs-eks-protect-$(date +%s)"
+    
+    local role_credentials=$(aws sts assume-role \
+        --role-arn "$role_arn" \
+        --role-session-name "$session_name" \
+        --output json)
+    
+    if [ $? -ne 0 ]; then
+        log "ERROR" "Failed to assume role: $role_arn"
+        exit 1
+    fi
+    
+    # Export the assumed role credentials
+    export AWS_ACCESS_KEY_ID=$(echo "$role_credentials" | jq -r '.Credentials.AccessKeyId')
+    export AWS_SECRET_ACCESS_KEY=$(echo "$role_credentials" | jq -r '.Credentials.SecretAccessKey')
+    export AWS_SESSION_TOKEN=$(echo "$role_credentials" | jq -r '.Credentials.SessionToken')
+    
+    # Verify the role assumption
+    local assumed_identity=$(aws sts get-caller-identity --output json)
+    local assumed_arn=$(echo "$assumed_identity" | jq -r '.Arn')
+    
+    if [[ "$assumed_arn" == *"$EXECUTION_ROLE_NAME"* ]]; then
+        log "SUCCESS" "Role assumed successfully: $assumed_arn"
+    else
+        log "ERROR" "Role assumption verification failed. Current identity: $assumed_arn"
+        exit 1
+    fi
+}
 
 # Function to check AWS CLI and configure EKS kubeconfig
 set_kubeconfig() {
@@ -493,6 +535,9 @@ create_falcon_deployment() {
 
 # Main execution
 main() {    
+    # Assume execution role first
+    assume_execution_role
+    
     # Setup and check configuration
     set_kubeconfig
     check_cluster_connection
