@@ -72,6 +72,22 @@ set_kubeconfig() {
     fi
 
     aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+    
+    # Fix kubeconfig to include AWS credentials in exec env
+    log "INFO" "Adding AWS credentials to kubeconfig exec environment"
+    kubectl config set-credentials "arn:aws:eks:$AWS_REGION:$(aws sts get-caller-identity --query Account --output text):cluster/$EKS_CLUSTER_NAME" \
+        --exec-command=aws \
+        --exec-arg=--region \
+        --exec-arg="$AWS_REGION" \
+        --exec-arg=eks \
+        --exec-arg=get-token \
+        --exec-arg=--cluster-name \
+        --exec-arg="$EKS_CLUSTER_NAME" \
+        --exec-arg=--output \
+        --exec-arg=json \
+        --exec-env=AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+        --exec-env=AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+        --exec-env=AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN"
 }
 
 # Function to check kubectl and cluster connectivity
