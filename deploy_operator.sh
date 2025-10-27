@@ -71,23 +71,47 @@ set_kubeconfig() {
         exit 1
     fi
 
-    aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+    # Generate kubeconfig with direct token instead of exec plugin
+    log "INFO" "Generating EKS token and creating token-based kubeconfig"
     
-    # Fix kubeconfig to include AWS credentials in exec env
-    log "INFO" "Adding AWS credentials to kubeconfig exec environment"
-    kubectl config set-credentials "arn:aws:eks:$AWS_REGION:$(aws sts get-caller-identity --query Account --output text):cluster/$EKS_CLUSTER_NAME" \
-        --exec-command=aws \
-        --exec-arg=--region \
-        --exec-arg="$AWS_REGION" \
-        --exec-arg=eks \
-        --exec-arg=get-token \
-        --exec-arg=--cluster-name \
-        --exec-arg="$EKS_CLUSTER_NAME" \
-        --exec-arg=--output \
-        --exec-arg=json \
-        --exec-env=AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
-        --exec-env=AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
-        --exec-env=AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN"
+    # Get the cluster endpoint and CA data
+    CLUSTER_ENDPOINT=$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.endpoint' --output text)
+    CLUSTER_CA=$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --query 'cluster.certificateAuthority.data' --output text)
+    
+    # Generate token directly
+    TOKEN_RESPONSE=$(aws eks get-token --cluster-name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --output json)
+    TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.status.token')
+    
+    if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+        log "ERROR" "Failed to generate EKS token"
+        exit 1
+    fi
+    
+    log "INFO" "Token generated successfully, creating kubeconfig"
+    
+    # Create kubeconfig with direct token
+    mkdir -p ~/.kube
+    cat > ~/.kube/config << EOF
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    certificate-authority-data: $CLUSTER_CA
+    server: $CLUSTER_ENDPOINT
+  name: $EKS_CLUSTER_NAME
+contexts:
+- context:
+    cluster: $EKS_CLUSTER_NAME
+    user: $EKS_CLUSTER_NAME-user
+  name: $EKS_CLUSTER_NAME
+current-context: $EKS_CLUSTER_NAME
+users:
+- name: $EKS_CLUSTER_NAME-user
+  user:
+    token: $TOKEN
+EOF
+
+    log "INFO" "Token-based kubeconfig created successfully"
 }
 
 # Function to check kubectl and cluster connectivity
