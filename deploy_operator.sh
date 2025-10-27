@@ -81,6 +81,8 @@ check_cluster_connection() {
         exit 1
     fi
 
+    kubectl config view --minify --raw
+
     log "INFO" "Testing Kubernetes cluster connectivity..."
     
     # Debug information
