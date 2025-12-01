@@ -5,6 +5,10 @@
 
 An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and ImageAnalyzer to EKS clusters across your AWS Organization using event-driven architecture.
 
+## Demo
+
+[![Demo of Automated Amazon EKS Protection](https://play.vidyard.com/t4bziryBy4LfdKhWW4fa1a.jpg)](https://vid.crowdstrike.com/watch/t4bziryBy4LfdKhWW4fa1a)
+
 ## Usage Guides
 
 | Guide | Description |
@@ -12,7 +16,6 @@ An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and
 | [Deployment Guide](DEPLOYMENT_GUIDE_README.md) | Complete setup instructions, prerequisites, and deployment options for new installations |
 | [Existing Cluster Guide](EXISTING_CLUSTER_README.md) | Manual deployment instructions for protecting existing EKS clusters |
 | [Customization Guide](CUSTOMIZATIONS_README.md) | Advanced configuration options for modifying Falcon deployment manifests and scripts |
-
 
 ## ✨ Features
 
@@ -26,23 +29,27 @@ An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and
 ## ⚙️ How It Works
 
 ### 1. Infrastructure Setup
+
 - **Self-Contained**: ECS Task runs in a dedicated VPC, subnets, NAT Gateway, and security groups
-- **Container Image**: Uses public `amazon/aws-cli:2.15.30` image 
+- **Container Image**: Uses public `amazon/aws-cli:2.15.30` image
   - pre-installed tools: aws-cli
   - installs dependencies and pulls latest scripts from GitHub at runtime
 
 ### 2. Script Details
+
 - **Event Handler**: Retrieves event data and configures ECS Task environment with required variables such as Cluster name, AWS Account ID, AWS Region
 - **Setup Script**: Adds the ECS Task ARN to the EKS Cluster Access entries and the ECS Task VPC NAT IP address to the inbound CIDR list
 - **Deploy Script**: Determines sensor type and apply Falcon Operator and Falcon Deployment Components using kubectl
 - **Falcon Deployment**: YAML manifest template with dynamic parameter substitution stored in Parameter Store
 
 ### 3. Enhanced Event-Driven Architecture
+
 - **EventBridge Rule**: Triggers when EKS clusters are created
 - **Centralized Custom EventBus**: EventBridge Rules across the AWS Organization target this to allow for a single, centralized ECS Cluster.
 - **ECS Fargate Task**: Invoked via EventBridge rule to run EKS Protection Scripts
 
 ### 4. Intelligent Sensor Deployment
+
 - **Auto Mode**: Set `SensorType` = `auto` to automatically select appropriate sensors based on cluster type
   - Fargate-only clusters → Falcon Container sensor
   - Node-based clusters → Falcon Node sensor
@@ -50,11 +57,12 @@ An automated solution for deploying CrowdStrike Falcon Operator, Sensor, KAC and
 - **Manual Override**: Set `SensorType` to `node`, `container` or `both` to force a sensor type and bypass cluster type detection
 
 ### Container Sensor Injection Behavior
+
 - Container sensor injection disabled by default
 - `falcon-sidecar-injector` pods may run but only inject the container sensor if Fargate pods are labeled.
 - This prevents duplicative sensors when running hybrid clusters (EC2 and Fargate) and allows both `DEPLOY_FALCON_NODE_SENSOR = true` and `DEPLOY_FALCON_CONTAINER = true`.
 
-**NOTE: Use the following label to inject Falcon Container to your pods**  
+**NOTE: Use the following label to inject Falcon Container to your pods**
  `falcon.crowdstrike.com/inject: "true"`
 
 ## 📊 Event-Driven Architecture
