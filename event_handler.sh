@@ -23,9 +23,9 @@ setup_configuration() {
     fi
 
     # Retrieve the manifest template from Parameter Store
+    # Note: Don't specify --region as ECS task runs in same region as SSM parameters
     MANIFEST_TEMPLATE=$(aws ssm get-parameter \
         --name "$FALCON_DEPLOYMENT_PARAMETER" \
-        --region "$AWS_REGION" \
         --query 'Parameter.Value' \
         --output text)
     export MANIFEST_TEMPLATE
