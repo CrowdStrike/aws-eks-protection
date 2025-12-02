@@ -128,7 +128,7 @@ Parameters:
   KubectlVersion:
     Type: String
     Description: Version of kubectl to install (see readme for recommendations)
-    Default: '1.33.0'
+    Default: '1.32.9'
 
 Conditions:
   SetPermissionsBoundary: !Not [ !Equals [ !Ref PermissionsBoundary, '' ]]
@@ -357,17 +357,17 @@ Resources:
       TaskRoleArn: !GetAtt ECSTaskRole.Arn
       ContainerDefinitions:
         - Name: falcon-eks-protection
-          Image: amazon/aws-cli:2.15.30
+          Image: amazon/aws-cli:2.31.29
           Essential: true
           EntryPoint: ["/bin/bash"]
           Command:
             - "-c"
             - |
               # Install required tools
-              yum update -y && yum install -y curl jq python3 python3-pip tar gzip unzip
+              yum update -y && yum install -y jq python3 python3-pip tar gzip unzip
               
               # Install kubectl
-              curl -LO "https://dl.k8s.io/release/v${KubectlVersion}/bin/linux/amd64/kubectl"
+              curl -LO "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
               chmod +x kubectl && mv kubectl /usr/local/bin/
               
               # Install helm
@@ -397,6 +397,8 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
           Environment:
+            - Name: KUBECTL_VERSION
+              Value: !Ref KubectlVersion
             - Name: DEPLOY_FALCON_OPERATOR
               Value: "true"
             - Name: DEPLOY_FALCON_RESOURCES
