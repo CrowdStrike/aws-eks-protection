@@ -50,18 +50,6 @@ show_usage() {
     cat <<EOF
 CrowdStrike Falcon EKS Protection - Deployment Script
 
-This script deploys the solution using public container images (alpine/k8s:1.28.4)
-with no build dependencies or ECR requirements.
-
-Features:
-✓ Uses public alpine/k8s:1.28.4 image (includes kubectl, aws-cli, helm, etc.)
-✓ No Docker build process required
-✓ No ECR repository needed
-✓ Creates its own VPC and networking infrastructure
-✓ EventBridge InputTransformer for reliable event data passing
-✓ Structured logging and improved error handling
-✓ Scripts stored in GitHub and AWS Parameter Store
-
 Prerequisites:
 - AWS CLI configured with appropriate credentials
 - CrowdStrike Falcon API credentials
@@ -106,6 +94,7 @@ Commands:
 
 Examples:
 # Local account deployment (default)
+export SCOPE="local account" 
 export FALCON_CLIENT_ID="your-client-id"
 export FALCON_CLIENT_SECRET="your-client-secret"
 export FALCON_CLOUD="us-1"
