@@ -155,7 +155,7 @@ Resources:
       Name: /crowdstrike/falcon-eks-protection/handler-script-url
       Type: String
       Description: GitHub URL for event handler script
-      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/main/event_handler.sh"
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/91338b5c206f4f21f8c56d3522637bd832a77412/event_handler.sh"
 
   SetupScriptParameter:
     Type: AWS::SSM::Parameter
@@ -163,7 +163,7 @@ Resources:
       Name: /crowdstrike/falcon-eks-protection/setup-script-url
       Type: String
       Description: GitHub URL for cluster setup script
-      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/main/setup_cluster.py"
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/91338b5c206f4f21f8c56d3522637bd832a77412/setup_cluster.py"
 
   DeployScriptParameter:
     Type: AWS::SSM::Parameter
@@ -171,7 +171,7 @@ Resources:
       Name: /crowdstrike/falcon-eks-protection/deploy-script-url
       Type: String
       Description: GitHub URL for deploy operator script
-      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/refs/heads/main/deploy_operator.sh"
+      Value: "https://raw.githubusercontent.com/CrowdStrike/aws-eks-protection/91338b5c206f4f21f8c56d3522637bd832a77412/deploy_operator.sh"
 
   # Store K8s Manifest for Falcon Deployment
   FalconDeploymentParameter:
@@ -406,7 +406,7 @@ Resources:
             - Name: FALCON_CLOUD_REGION
               Value: "autodiscover"
             - Name: FALCON_OPERATOR_VERSION
-              Value: "latest"
+              Value: "v1.16.0"
             - Name: DEPLOY_FALCON_ADMISSION
               Value: !Ref DeployFalconAdmission
             - Name: DEPLOY_FALCON_IMAGE_ANALYZER
