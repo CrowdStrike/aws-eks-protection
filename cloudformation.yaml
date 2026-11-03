@@ -326,6 +326,14 @@ Resources:
                   - cloudformation:DescribeStackResources
                   - cloudformation:DescribeStackEvents
                 Resource: "*"
+              # Scope privilege-escalation actions to the module's own role name prefix (SOLAR-2334)
+              - Effect: Deny
+                Action:
+                  - iam:CreateRole
+                  - iam:AttachRolePolicy
+                  - iam:PassRole
+                NotResource:
+                  - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ResourcePrefix}-*'
               - Effect: Allow
                 Action:
                   - eks:UpdateAccessEntry
