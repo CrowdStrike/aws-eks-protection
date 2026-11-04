@@ -52,7 +52,7 @@ handle_error() {
     local exit_code=$1
     local line_number=$2
     log "ERROR" "Script failed at line $line_number with exit code $exit_code"
-    exit $exit_code
+    exit "$exit_code"
 }
 
 # Set error handling after functions are defined
