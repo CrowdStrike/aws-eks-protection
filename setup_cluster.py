@@ -89,7 +89,7 @@ def setup_cluster(eks_client, cidrs_list):
                 name=EKS_CLUSTER_NAME,
                 updateId=update_id
             )
-            while update_response['update']['status'] in 'InProgress':
+            while update_response['update']['status'] == 'InProgress':
                 logger.info('waiting for update to complete...')
                 time.sleep(30)
                 update_response = eks_client.describe_update(
