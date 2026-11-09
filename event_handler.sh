@@ -16,6 +16,11 @@ setup_configuration() {
         log "ERROR" "EKS_CLUSTER_NAME environment variable is required"
         exit 1
     fi
+    # Validate EKS_CLUSTER_NAME contains only safe characters (SOLAR-2337)
+    if [[ ! "${EKS_CLUSTER_NAME}" =~ ^[a-zA-Z0-9._-]{1,100}$ ]]; then
+        log "ERROR" "EKS_CLUSTER_NAME contains invalid characters"
+        exit 1
+    fi
     
     if [[ -z "${AWS_REGION}" ]]; then
         log "ERROR" "AWS_REGION environment variable is required"
@@ -48,8 +53,13 @@ setup_configuration() {
 # Function to assume role if in an org
 assume_role() {
     if [ ! "$SCOPE" = "local account" ]; then
+        # Validate ACCOUNT_ID is a 12-digit AWS account number (SOLAR-2337)
+        if [[ ! "${ACCOUNT_ID}" =~ ^[0-9]{12}$ ]]; then
+            log "ERROR" "ACCOUNT_ID '${ACCOUNT_ID}' is not a valid 12-digit AWS account ID"
+            exit 1
+        fi
         log "INFO" "Assuming role: $SWITCH_ROLE"
-        
+
         arn="arn:${PARTITION}:iam::${ACCOUNT_ID}:role/${SWITCH_ROLE}"
         CREDENTIALS=$(aws sts assume-role \
             --role-arn "$arn" \
